@@ -96,6 +96,7 @@ type ChatwootWebhookPayload struct {
 	MessageType       string                      `json:"message_type"`
 	Content           string                      `json:"content"`
 	Private           bool                        `json:"private"`
+	SourceID          string                      `json:"source_id,omitempty"`
 	ContentAttributes map[string]interface{}    `json:"content_attributes,omitempty"`
 	InReplyTo         interface{}                 `json:"in_reply_to,omitempty"`
 	Sender            ChatwootWebhookSender       `json:"sender"`

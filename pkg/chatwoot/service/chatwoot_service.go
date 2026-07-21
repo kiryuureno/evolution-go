@@ -700,6 +700,10 @@ func (s *chatwootService) postMessageToChatwoot(instance *instance_model.Instanc
 		}
 	}
 
+	if sourceId != "" {
+		s.sentMessageCache.Set(sourceId, true, cache.DefaultExpiration)
+	}
+
 	bodyBytes, _ := json.Marshal(msgReq)
 	req, err := http.NewRequest("POST", url, bytes.NewBuffer(bodyBytes))
 	if err != nil {
@@ -774,11 +778,13 @@ func (s *chatwootService) postMediaMessageToChatwoot(instance *instance_model.In
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
-
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		b, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("erro ao postar mídia no chatwoot status %d: %s", resp.StatusCode, string(b))
+	}
+
+	if sourceId != "" {
+		s.sentMessageCache.Set(sourceId, true, cache.DefaultExpiration)
 	}
 
 	return nil
@@ -809,8 +815,15 @@ func (s *chatwootService) ProcessChatwootWebhook(instanceIdOrName string, payloa
 		return nil
 	}
 
+	if webhookPayload.SourceID != "" {
+		return nil
+	}
+
 	if webhookPayload.ContentAttributes != nil {
 		if sid, ok := webhookPayload.ContentAttributes["source_id"].(string); ok && sid != "" {
+			return nil
+		}
+		if sid, ok := webhookPayload.ContentAttributes["external_id"].(string); ok && sid != "" {
 			return nil
 		}
 	}
