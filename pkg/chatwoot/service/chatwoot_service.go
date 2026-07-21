@@ -269,6 +269,17 @@ func (s *chatwootService) ProcessWhatsAppEvent(instance *instance_model.Instance
 		return err
 	}
 
+	// 3. Extrair Conteúdo da Mensagem
+	content := extractTextFromMessageData(data)
+	if content == "" {
+		content = "[Mídia / Mensagem não suportada]"
+	}
+
+	msgType := "incoming"
+	if fromMe {
+		msgType = "outgoing"
+	}
+
 	msgId := ""
 	if id, ok := key["id"].(string); ok {
 		msgId = id
