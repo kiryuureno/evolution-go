@@ -431,7 +431,7 @@ func (s *chatwootService) findOrCreateConversation(instance *instance_model.Inst
 	req.Header.Set("api_access_token", instance.ChatwootToken)
 
 	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err = client.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return 0, err
 	}
