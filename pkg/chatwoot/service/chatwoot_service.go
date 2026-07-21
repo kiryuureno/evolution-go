@@ -965,8 +965,8 @@ func (s *chatwootService) ProcessChatwootWebhook(instanceIdOrName string, payloa
 			res, err := s.sendService.SendMediaUrl(mediaData, instance)
 			if err != nil {
 				s.loggerWrapper.GetLogger(instance.Id).LogError("[%s] Erro ao enviar mídia via WhatsApp: %v", instance.Id, err)
-			} else if res != nil && res.ID != "" {
-				s.sentMessageCache.Set(res.ID, true, cache.DefaultExpiration)
+			} else if res != nil && res.Info.ID != "" {
+				s.sentMessageCache.Set(res.Info.ID, true, cache.DefaultExpiration)
 			}
 		}
 		return nil
@@ -984,8 +984,8 @@ func (s *chatwootService) ProcessChatwootWebhook(instanceIdOrName string, payloa
 			s.loggerWrapper.GetLogger(instance.Id).LogError("[%s] Erro ao enviar texto via WhatsApp: %v", instance.Id, err)
 			return err
 		}
-		if res != nil && res.ID != "" {
-			s.sentMessageCache.Set(res.ID, true, cache.DefaultExpiration)
+		if res != nil && res.Info.ID != "" {
+			s.sentMessageCache.Set(res.Info.ID, true, cache.DefaultExpiration)
 		}
 	}
 
