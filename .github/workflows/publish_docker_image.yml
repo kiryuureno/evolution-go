@@ -28,17 +28,17 @@ jobs:
           VERSION=$(cat VERSION 2>/dev/null || echo '0.0.0')
           echo "version=${VERSION}" >> $GITHUB_OUTPUT
 
-      - name: Extract Repository Name Lowercase
-        id: repo_name
+      - name: Extract Repository Owner Lowercase
+        id: repo_owner
         run: |
-          echo "repo=${GITHUB_REPOSITORY,,}" >> $GITHUB_OUTPUT
+          echo "owner=${GITHUB_REPOSITORY_OWNER,,}" >> $GITHUB_OUTPUT
 
       - name: Docker Meta Configurations
         id: meta
         uses: docker/metadata-action@v5
         with:
           images: |
-            ghcr.io/${{ steps.repo_name.outputs.repo }}
+            ghcr.io/${{ steps.repo_owner.outputs.owner }}/evolutiongo
           tags: |
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' }}
             type=raw,value=${{ steps.version.outputs.version }}

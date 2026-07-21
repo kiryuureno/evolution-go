@@ -5,7 +5,7 @@ services:
 ## --------------------------- ORION --------------------------- ##
 
   evolution_go:
-    image: ghcr.io/kiryuureno/evolution-go:latest ## Ou evoapicloud/evolution-go:latest
+    image: ghcr.io/kiryuureno/evolutiongo:latest ## Imagem gerada no GHCR (novo nome sem conflitos)
     
     volumes:
       - evolution_go_instances:/app/dbdata
