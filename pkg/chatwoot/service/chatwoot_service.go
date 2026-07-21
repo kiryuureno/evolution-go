@@ -305,9 +305,18 @@ func (s *chatwootService) ProcessWhatsAppEvent(instance *instance_model.Instance
 	}
 
 	phoneNumber := "+" + strings.Split(targetJid, "@")[0]
+	altLid := ""
+	if chatAlt, ok := data["ChatAlt"].(string); ok && strings.HasSuffix(chatAlt, "@lid") {
+		altLid = chatAlt
+	}
+	if altLid == "" {
+		if senderAlt, ok := data["SenderAlt"].(string); ok && strings.HasSuffix(senderAlt, "@lid") {
+			altLid = senderAlt
+		}
+	}
 
 	// 1. Criar ou Buscar Contato no Chatwoot
-	contactId, err := s.findOrCreateContact(instance, pushName, phoneNumber, targetJid)
+	contactId, err := s.findOrCreateContact(instance, pushName, phoneNumber, targetJid, altLid)
 	if err != nil {
 		s.loggerWrapper.GetLogger(instance.Id).LogError("[%s] Erro ao buscar/criar contato no Chatwoot: %v", instance.Id, err)
 		return err
@@ -320,7 +329,7 @@ func (s *chatwootService) ProcessWhatsAppEvent(instance *instance_model.Instance
 		return err
 	}
 
-	// 3. Extrair Conteúdo da Mensagem
+	// 3. Extrair Conteúdo da Mensagem (suporte a texto, reações e mensagens apagadas)
 	content := extractTextFromMessageData(data)
 	if content == "" {
 		content = "[Mídia / Mensagem não suportada]"
@@ -373,11 +382,42 @@ func (s *chatwootService) ProcessWhatsAppEvent(instance *instance_model.Instance
 	return s.postMessageToChatwoot(instance, conversationId, content, msgType, msgId, quotedStanzaId)
 }
 
-func (s *chatwootService) findOrCreateContact(instance *instance_model.Instance, name, phoneNumber, identifier string) (int, error) {
-	cleanPhone := strings.TrimPrefix(phoneNumber, "+")
+func (s *chatwootService) updateContactIdentifier(instance *instance_model.Instance, contactId int, identifier string) {
+	if contactId <= 0 || identifier == "" {
+		return
+	}
+	url := fmt.Sprintf("%s/api/v1/accounts/%s/contacts/%d", instance.ChatwootUrl, instance.ChatwootAccountId, contactId)
+	bodyMap := map[string]string{"identifier": identifier}
+	bodyBytes, _ := json.Marshal(bodyMap)
 
-	// 1. Tentar buscar contato por telefone ou identifier no Chatwoot
-	for _, query := range []string{phoneNumber, cleanPhone, identifier} {
+	req, err := http.NewRequest("PUT", url, bytes.NewBuffer(bodyBytes))
+	if err == nil {
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("api_access_token", instance.ChatwootToken)
+		client := &http.Client{Timeout: 5 * time.Second}
+		resp, err := client.Do(req)
+		if err == nil {
+			resp.Body.Close()
+		}
+	}
+}
+
+func (s *chatwootService) findOrCreateContact(instance *instance_model.Instance, name, phoneNumber, identifier, altLid string) (int, error) {
+	cleanPhone := strings.TrimPrefix(phoneNumber, "+")
+	isLid := strings.HasSuffix(identifier, "@lid") || strings.HasSuffix(phoneNumber, "@lid")
+
+	searchQueries := []string{identifier}
+	if altLid != "" {
+		searchQueries = append(searchQueries, altLid, strings.Split(altLid, "@")[0])
+	}
+	if !isLid {
+		searchQueries = append(searchQueries, phoneNumber, cleanPhone)
+	} else {
+		searchQueries = append(searchQueries, strings.Split(identifier, "@")[0])
+	}
+
+	// 1. Tentar buscar contato por identifier, altLid ou telefone no Chatwoot
+	for _, query := range searchQueries {
 		if query == "" {
 			continue
 		}
@@ -392,17 +432,26 @@ func (s *chatwootService) findOrCreateContact(instance *instance_model.Instance,
 			resp.Body.Close()
 			var searchRes chatwoot_model.ChatwootSearchContactResp
 			if json.Unmarshal(bodyBytes, &searchRes) == nil && len(searchRes.Payload) > 0 {
-				return searchRes.Payload[0].ID, nil
+				cId := searchRes.Payload[0].ID
+				if altLid != "" {
+					go s.updateContactIdentifier(instance, cId, altLid)
+				}
+				return cId, nil
 			}
 		}
 	}
 
-	// 2. Se não encontrou contato existente, criar um novo
+	// 2. Se for LID puro e não achou o contato, evitar criar telefone fictício "+2680..."
+	reqPhone := phoneNumber
+	if isLid {
+		reqPhone = ""
+	}
+
 	createUrl := fmt.Sprintf("%s/api/v1/accounts/%s/contacts", instance.ChatwootUrl, instance.ChatwootAccountId)
 	contactReq := chatwoot_model.ChatwootContactReq{
 		InboxId:     instance.ChatwootInboxId,
 		Name:        name,
-		PhoneNumber: phoneNumber,
+		PhoneNumber: reqPhone,
 		Identifier:  identifier,
 	}
 
@@ -422,20 +471,30 @@ func (s *chatwootService) findOrCreateContact(instance *instance_model.Instance,
 	}
 	defer resp.Body.Close()
 
+	cId := 0
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		var contactResp chatwoot_model.ChatwootContactResp
 		if err := json.NewDecoder(resp.Body).Decode(&contactResp); err == nil {
 			if contactResp.Payload.Contact.ID > 0 {
-				return contactResp.Payload.Contact.ID, nil
-			}
-			if contactResp.ID > 0 {
-				return contactResp.ID, nil
+				cId = contactResp.Payload.Contact.ID
+			} else if contactResp.ID > 0 {
+				cId = contactResp.ID
 			}
 		}
 	}
 
-	// 3. Se a criação falhou (ex: status 422 "Phone number has already been taken"), reler contatos para encontrar o ID existente
-	for _, query := range []string{cleanPhone, phoneNumber, identifier} {
+	if cId > 0 {
+		if altLid != "" {
+			go s.updateContactIdentifier(instance, cId, altLid)
+		}
+		return cId, nil
+	}
+
+	// 3. Fallback se a criação retornar erro (ex: 422 "Phone number has already been taken")
+	for _, query := range searchQueries {
+		if query == "" {
+			continue
+		}
 		searchUrl := fmt.Sprintf("%s/api/v1/accounts/%s/contacts/search?q=%s", instance.ChatwootUrl, instance.ChatwootAccountId, query)
 		req, _ := http.NewRequest("GET", searchUrl, nil)
 		req.Header.Set("api_access_token", instance.ChatwootToken)
@@ -452,7 +511,7 @@ func (s *chatwootService) findOrCreateContact(instance *instance_model.Instance,
 		}
 	}
 
-	return 0, fmt.Errorf("não foi possível obter contato no Chatwoot para %s", phoneNumber)
+	return 0, fmt.Errorf("não foi possível obter contato no Chatwoot para %s", identifier)
 }
 
 func (s *chatwootService) findOrCreateConversation(instance *instance_model.Instance, contactId int, sourceId string) (int, error) {
@@ -658,6 +717,19 @@ func (s *chatwootService) ProcessChatwootWebhook(instanceIdOrName string, payloa
 		return fmt.Errorf("payload de webhook inválido: %v", err)
 	}
 
+	// Verificar se é um evento de exclusão de mensagem no Chatwoot
+	isDeleted := false
+	if webhookPayload.ContentAttributes != nil {
+		if del, ok := webhookPayload.ContentAttributes["deleted"].(bool); ok && del {
+			isDeleted = true
+		}
+	}
+
+	if (webhookPayload.Event == "message_updated" && isDeleted) || webhookPayload.Event == "message_deleted" {
+		// Evento de exclusão aceito
+		return nil
+	}
+
 	// Filtra apenas mensagens de saída enviadas por agentes
 	if webhookPayload.Event != "message_created" || webhookPayload.MessageType != "outgoing" || webhookPayload.Private {
 		return nil
@@ -673,11 +745,13 @@ func (s *chatwootService) ProcessChatwootWebhook(instanceIdOrName string, payloa
 	}
 
 	phoneNumber := webhookPayload.Contact.PhoneNumber
-	if phoneNumber == "" {
+	if phoneNumber == "" || strings.Contains(phoneNumber, "lid") {
 		phoneNumber = webhookPayload.Contact.Identifier
 	}
 
 	phoneNumber = strings.TrimPrefix(phoneNumber, "+")
+	phoneNumber = strings.Split(phoneNumber, "@")[0]
+
 	if phoneNumber == "" {
 		return errors.New("número do destinatário não encontrado no payload do Chatwoot")
 	}
