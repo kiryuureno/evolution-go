@@ -223,6 +223,16 @@ func (s *chatwootService) ProcessWhatsAppEvent(instance *instance_model.Instance
 	}
 
 	remoteJid, _ := key["remoteJid"].(string)
+
+	// Resolver JID real de telefone caso remoteJid seja um LID (ex: 260313823891664@lid -> 556399400537@s.whatsapp.net)
+	if chat, ok := data["Chat"].(string); ok && chat != "" && !strings.HasSuffix(chat, "@lid") {
+		remoteJid = chat
+	} else if sender, ok := data["Sender"].(string); ok && sender != "" && !strings.HasSuffix(sender, "@lid") {
+		remoteJid = sender
+	} else if senderAlt, ok := data["SenderAlt"].(string); ok && senderAlt != "" && !strings.HasSuffix(senderAlt, "@lid") {
+		remoteJid = senderAlt
+	}
+
 	if remoteJid == "" || strings.HasSuffix(remoteJid, "@broadcast") {
 		return nil
 	}
@@ -234,7 +244,11 @@ func (s *chatwootService) ProcessWhatsAppEvent(instance *instance_model.Instance
 	fromMe, _ := key["fromMe"].(bool)
 	pushName, _ := data["pushName"].(string)
 	if pushName == "" {
-		pushName = strings.Split(remoteJid, "@")[0]
+		if pn, ok := data["PushName"].(string); ok && pn != "" {
+			pushName = pn
+		} else {
+			pushName = strings.Split(remoteJid, "@")[0]
+		}
 	}
 
 	phoneNumber := "+" + strings.Split(remoteJid, "@")[0]
@@ -505,7 +519,13 @@ func (s *chatwootService) getInstance(instanceIdOrName string) (*instance_model.
 func extractTextFromMessageData(data map[string]interface{}) string {
 	msg, ok := data["message"].(map[string]interface{})
 	if !ok || msg == nil {
-		return ""
+		msg, ok = data["Message"].(map[string]interface{})
+		if !ok || msg == nil {
+			if text, ok := data["text"].(string); ok && text != "" {
+				return text
+			}
+			return ""
+		}
 	}
 
 	if conversation, ok := msg["conversation"].(string); ok && conversation != "" {
@@ -539,9 +559,38 @@ func extractTextFromMessageData(data map[string]interface{}) string {
 
 	if documentMsg, ok := msg["documentMessage"].(map[string]interface{}); ok {
 		if title, ok := documentMsg["title"].(string); ok && title != "" {
+			if caption, ok := documentMsg["caption"].(string); ok && caption != "" {
+				return fmt.Sprintf("[Documento - %s]: %s", title, caption)
+			}
 			return fmt.Sprintf("[Documento]: %s", title)
 		}
+		if caption, ok := documentMsg["caption"].(string); ok && caption != "" {
+			return fmt.Sprintf("[Documento]: %s", caption)
+		}
 		return "[Documento]"
+	}
+
+	if stickerMsg, ok := msg["stickerMessage"].(map[string]interface{}); ok {
+		_ = stickerMsg
+		return "[Sticker / Figurinha]"
+	}
+
+	if contactMsg, ok := msg["contactMessage"].(map[string]interface{}); ok {
+		if displayName, ok := contactMsg["displayName"].(string); ok && displayName != "" {
+			return fmt.Sprintf("[Contato]: %s", displayName)
+		}
+		return "[Contato]"
+	}
+
+	if locationMsg, ok := msg["locationMessage"].(map[string]interface{}); ok {
+		if name, ok := locationMsg["name"].(string); ok && name != "" {
+			return fmt.Sprintf("[Localização]: %s", name)
+		}
+		return "[Localização]"
+	}
+
+	if text, ok := msg["text"].(string); ok && text != "" {
+		return text
 	}
 
 	return ""
