@@ -1198,11 +1198,23 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 		chatStr := evt.Info.Chat.String()
 		recipientAltStr := evt.Info.RecipientAlt.String()
 
+		myPhoneNum := ""
+		if mycli.store != nil && mycli.store.ID != nil {
+			myPhoneNum = mycli.store.ID.User
+		}
+
 		altPhoneJid := ""
 		if strings.Contains(senderAltStr, "@s.whatsapp.net") {
-			altPhoneJid = senderAltStr
-		} else if strings.Contains(recipientAltStr, "@s.whatsapp.net") {
-			altPhoneJid = recipientAltStr
+			userNum := strings.Split(cleanSenderID(senderAltStr), "@")[0]
+			if myPhoneNum == "" || (userNum != myPhoneNum && strings.TrimPrefix(userNum, "55") != strings.TrimPrefix(myPhoneNum, "55")) {
+				altPhoneJid = senderAltStr
+			}
+		}
+		if altPhoneJid == "" && strings.Contains(recipientAltStr, "@s.whatsapp.net") {
+			userNum := strings.Split(cleanSenderID(recipientAltStr), "@")[0]
+			if myPhoneNum == "" || (userNum != myPhoneNum && strings.TrimPrefix(userNum, "55") != strings.TrimPrefix(myPhoneNum, "55")) {
+				altPhoneJid = recipientAltStr
+			}
 		}
 
 		lidJid := ""

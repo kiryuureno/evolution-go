@@ -261,20 +261,35 @@ func (s *chatwootService) ProcessWhatsAppEvent(instance *instance_model.Instance
 	for _, c := range candidates {
 		cClean := strings.Split(c, ":")[0]
 		userNum := strings.Split(cClean, "@")[0]
+		if myNumber != "" && (userNum == myNumber || strings.TrimPrefix(userNum, "55") == strings.TrimPrefix(myNumber, "55")) {
+			continue
+		}
 		if !strings.HasSuffix(cClean, "@lid") && !strings.HasSuffix(cClean, "@broadcast") {
-			if myNumber != "" && (userNum == myNumber || strings.TrimPrefix(userNum, "55") == strings.TrimPrefix(myNumber, "55")) {
-				continue
-			}
 			targetJid = cClean
 			break
 		}
 	}
 
 	if targetJid == "" {
-		targetJid = strings.Split(keyJid, ":")[0]
+		for _, c := range candidates {
+			cClean := strings.Split(c, ":")[0]
+			userNum := strings.Split(cClean, "@")[0]
+			if myNumber != "" && (userNum == myNumber || strings.TrimPrefix(userNum, "55") == strings.TrimPrefix(myNumber, "55")) {
+				continue
+			}
+			if !strings.HasSuffix(cClean, "@broadcast") {
+				targetJid = cClean
+				break
+			}
+		}
 	}
 
 	if targetJid == "" || strings.HasSuffix(targetJid, "@broadcast") {
+		return nil
+	}
+
+	targetNum := strings.Split(targetJid, "@")[0]
+	if myNumber != "" && (targetNum == myNumber || strings.TrimPrefix(targetNum, "55") == strings.TrimPrefix(myNumber, "55")) {
 		return nil
 	}
 
