@@ -815,8 +815,8 @@ func (s *chatwootService) ProcessChatwootWebhook(instanceIdOrName string, payloa
 	cleanNum := strings.TrimPrefix(phoneNumber, "+")
 	cleanNum = strings.Split(cleanNum, "@")[0]
 
-	if cleanNum == "" || len(cleanNum) > 13 || strings.Contains(cleanNum, "lid") {
-		// Se o contato no Chatwoot ainda tiver número fictício/LID, consultar API do Chatwoot para obter o telefone atualizado
+	// 1. Tentar obter pelo ID de Contato no Chatwoot
+	if (cleanNum == "" || len(cleanNum) > 13 || strings.Contains(cleanNum, "lid")) && webhookPayload.Contact.ID > 0 {
 		contactUrl := fmt.Sprintf("%s/api/v1/accounts/%s/contacts/%d", instance.ChatwootUrl, instance.ChatwootAccountId, webhookPayload.Contact.ID)
 		req, _ := http.NewRequest("GET", contactUrl, nil)
 		req.Header.Set("api_access_token", instance.ChatwootToken)
@@ -836,10 +836,42 @@ func (s *chatwootService) ProcessChatwootWebhook(instanceIdOrName string, payloa
 		}
 	}
 
+	// 2. Se ainda assim não encontrar (ex: Grupos de WhatsApp ou conversas sem contato primário), consultar a API da Conversa no Chatwoot
+	if (cleanNum == "" || len(cleanNum) > 13 || strings.Contains(cleanNum, "lid")) && webhookPayload.Conversation.ID > 0 {
+		convUrl := fmt.Sprintf("%s/api/v1/accounts/%s/conversations/%d", instance.ChatwootUrl, instance.ChatwootAccountId, webhookPayload.Conversation.ID)
+		req, _ := http.NewRequest("GET", convUrl, nil)
+		req.Header.Set("api_access_token", instance.ChatwootToken)
+		client := &http.Client{Timeout: 5 * time.Second}
+		resp, err := client.Do(req)
+		if err == nil && resp.StatusCode == 200 {
+			bBytes, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+
+			var convMap map[string]interface{}
+			if json.Unmarshal(bBytes, &convMap) == nil {
+				if sourceId, ok := convMap["source_id"].(string); ok && sourceId != "" {
+					cleanNum = strings.TrimPrefix(sourceId, "+")
+					cleanNum = strings.Split(cleanNum, "@")[0]
+				}
+				if cleanNum == "" || len(cleanNum) > 13 || strings.Contains(cleanNum, "lid") {
+					if meta, ok := convMap["meta"].(map[string]interface{}); ok {
+						if sender, ok := meta["sender"].(map[string]interface{}); ok {
+							if phone, ok := sender["phone_number"].(string); ok && phone != "" {
+								cleanNum = strings.TrimPrefix(phone, "+")
+							} else if ident, ok := sender["identifier"].(string); ok && ident != "" && !strings.Contains(ident, "lid") {
+								cleanNum = strings.Split(strings.TrimPrefix(ident, "+"), "@")[0]
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
 	phoneNumber = cleanNum
-	if phoneNumber == "" || len(phoneNumber) > 13 {
-		s.loggerWrapper.GetLogger(instance.Id).LogError("[%s] Não foi possível enviar mensagem para o Chatwoot: contato ID %d sem telefone válido (%s)", instance.Id, webhookPayload.Contact.ID, phoneNumber)
-		return fmt.Errorf("número de telefone %s inválido para envio via WhatsApp", phoneNumber)
+	if phoneNumber == "" {
+		s.loggerWrapper.GetLogger(instance.Id).LogError("[%s] Não foi possível enviar mensagem para o Chatwoot: conversa ID %d / contato ID %d sem destinatário válido", instance.Id, webhookPayload.Conversation.ID, webhookPayload.Contact.ID)
+		return fmt.Errorf("número de telefone ou grupo inválido para envio via WhatsApp")
 	}
 
 	text := webhookPayload.Content
