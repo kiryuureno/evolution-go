@@ -1192,29 +1192,42 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 			return
 		}
 
-		// Trata o caso especial onde Sender é @lid e SenderAlt é @s.whatsapp.net
-		// Neste caso, devemos inverter: Sender e Chat devem ser @s.whatsapp.net, SenderAlt deve ser @lid
+		// Trata a troca de LID por WhatsApp JID real (@s.whatsapp.net) para mensagens recebidas e enviadas
 		senderStr := evt.Info.Sender.String()
 		senderAltStr := evt.Info.SenderAlt.String()
 		chatStr := evt.Info.Chat.String()
+		recipientAltStr := evt.Info.RecipientAlt.String()
 
-		if strings.Contains(senderStr, "@lid") && strings.Contains(senderAltStr, "@s.whatsapp.net") {
-			mycli.loggerWrapper.GetLogger(mycli.userID).LogInfo("[%s] Detected LID/WhatsApp JID swap case - Sender: %s, SenderAlt: %s", mycli.userID, senderStr, senderAltStr)
+		altPhoneJid := ""
+		if strings.Contains(senderAltStr, "@s.whatsapp.net") {
+			altPhoneJid = senderAltStr
+		} else if strings.Contains(recipientAltStr, "@s.whatsapp.net") {
+			altPhoneJid = recipientAltStr
+		}
 
-			// Limpa os IDs antes de fazer a troca
-			cleanSenderAlt := cleanSenderID(senderAltStr)
-			cleanSender := cleanSenderID(senderStr)
+		lidJid := ""
+		if strings.Contains(senderStr, "@lid") {
+			lidJid = senderStr
+		} else if strings.Contains(chatStr, "@lid") {
+			lidJid = chatStr
+		}
 
-			// Inverte: Sender e Chat recebem o @s.whatsapp.net, SenderAlt recebe o @lid
-			if cleanedWhatsAppJID, err := types.ParseJID(cleanSenderAlt); err == nil {
-				evt.Info.Sender = cleanedWhatsAppJID
-				// Se Chat também é @lid, atualiza para @s.whatsapp.net
+		if lidJid != "" && altPhoneJid != "" {
+			mycli.loggerWrapper.GetLogger(mycli.userID).LogInfo("[%s] Detected LID/WhatsApp JID swap case - LID: %s, RealPhone: %s", mycli.userID, lidJid, altPhoneJid)
+
+			cleanPhone := cleanSenderID(altPhoneJid)
+			cleanLID := cleanSenderID(lidJid)
+
+			if cleanedPhoneJID, err := types.ParseJID(cleanPhone); err == nil {
+				if strings.Contains(senderStr, "@lid") {
+					evt.Info.Sender = cleanedPhoneJID
+				}
 				if strings.Contains(chatStr, "@lid") {
-					evt.Info.Chat = cleanedWhatsAppJID
+					evt.Info.Chat = cleanedPhoneJID
 				}
 			}
 
-			if cleanedLID, err := types.ParseJID(cleanSender); err == nil {
+			if cleanedLID, err := types.ParseJID(cleanLID); err == nil {
 				evt.Info.SenderAlt = cleanedLID
 			}
 

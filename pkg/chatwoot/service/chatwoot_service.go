@@ -393,25 +393,61 @@ func (s *chatwootService) updateContactDetails(instance *instance_model.Instance
 	if name != "" && !strings.HasSuffix(name, "@lid") {
 		bodyMap["name"] = name
 	}
+	cleanPhone := phoneNumber
+	if !strings.HasPrefix(cleanPhone, "+") && cleanPhone != "" {
+		cleanPhone = "+" + cleanPhone
+	}
 	if phoneNumber != "" && !strings.Contains(phoneNumber, "lid") && len(strings.TrimPrefix(phoneNumber, "+")) <= 13 {
-		bodyMap["phone_number"] = phoneNumber
+		bodyMap["phone_number"] = cleanPhone
 	}
 	if identifier != "" {
 		bodyMap["identifier"] = identifier
 	}
-	if len(bodyMap) == 0 {
-		return
+	if len(bodyMap) > 0 {
+		bodyBytes, _ := json.Marshal(bodyMap)
+		req, err := http.NewRequest("PUT", url, bytes.NewBuffer(bodyBytes))
+		if err == nil {
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("api_access_token", instance.ChatwootToken)
+			client := &http.Client{Timeout: 5 * time.Second}
+			resp, err := client.Do(req)
+			if err == nil {
+				resp.Body.Close()
+			}
+		}
 	}
 
-	bodyBytes, _ := json.Marshal(bodyMap)
-	req, err := http.NewRequest("PUT", url, bytes.NewBuffer(bodyBytes))
-	if err == nil {
-		req.Header.Set("Content-Type", "application/json")
+	// Se houver um LID associado, atualizar contatos duplicados no Chatwoot com o telefone real E.164
+	if identifier != "" && strings.HasSuffix(identifier, "@lid") && phoneNumber != "" {
+		lidDigits := strings.Split(identifier, "@")[0]
+		searchUrl := fmt.Sprintf("%s/api/v1/accounts/%s/contacts/search?q=%s", instance.ChatwootUrl, instance.ChatwootAccountId, lidDigits)
+		req, _ := http.NewRequest("GET", searchUrl, nil)
 		req.Header.Set("api_access_token", instance.ChatwootToken)
 		client := &http.Client{Timeout: 5 * time.Second}
 		resp, err := client.Do(req)
-		if err == nil {
+		if err == nil && resp.StatusCode == 200 {
+			bBytes, _ := io.ReadAll(resp.Body)
 			resp.Body.Close()
+			var searchRes chatwoot_model.ChatwootSearchContactResp
+			if json.Unmarshal(bBytes, &searchRes) == nil {
+				for _, dupContact := range searchRes.Payload {
+					if dupContact.ID != contactId && dupContact.ID > 0 {
+						dupUrl := fmt.Sprintf("%s/api/v1/accounts/%s/contacts/%d", instance.ChatwootUrl, instance.ChatwootAccountId, dupContact.ID)
+						dupMap := map[string]string{
+							"phone_number": cleanPhone,
+						}
+						dBytes, _ := json.Marshal(dupMap)
+						dReq, _ := http.NewRequest("PUT", dupUrl, bytes.NewBuffer(dBytes))
+						if dReq != nil {
+							dReq.Header.Set("Content-Type", "application/json")
+							dReq.Header.Set("api_access_token", instance.ChatwootToken)
+							if dResp, err := client.Do(dReq); err == nil {
+								dResp.Body.Close()
+							}
+						}
+					}
+				}
+			}
 		}
 	}
 }
