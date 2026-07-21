@@ -14,6 +14,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/patrickmn/go-cache"
+
 	chatwoot_model "github.com/evolution-foundation/evolution-go/pkg/chatwoot/model"
 	instance_model "github.com/evolution-foundation/evolution-go/pkg/instance/model"
 	instance_repository "github.com/evolution-foundation/evolution-go/pkg/instance/repository"
@@ -32,9 +34,10 @@ type ChatwootService interface {
 }
 
 type chatwootService struct {
-	instanceRepo  instance_repository.InstanceRepository
-	sendService   send_service.SendService
-	loggerWrapper *logger_wrapper.LoggerManager
+	instanceRepo     instance_repository.InstanceRepository
+	sendService      send_service.SendService
+	loggerWrapper    *logger_wrapper.LoggerManager
+	sentMessageCache *cache.Cache
 }
 
 func NewChatwootService(
@@ -43,9 +46,10 @@ func NewChatwootService(
 	loggerWrapper *logger_wrapper.LoggerManager,
 ) ChatwootService {
 	return &chatwootService{
-		instanceRepo:  instanceRepo,
-		sendService:   sendService,
-		loggerWrapper: loggerWrapper,
+		instanceRepo:     instanceRepo,
+		sendService:      sendService,
+		loggerWrapper:    loggerWrapper,
+		sentMessageCache: cache.New(5*time.Minute, 10*time.Minute),
 	}
 }
 
@@ -369,6 +373,13 @@ func (s *chatwootService) ProcessWhatsAppEvent(instance *instance_model.Instance
 	msgId := ""
 	if id, ok := key["id"].(string); ok {
 		msgId = id
+	}
+
+	if fromMe && msgId != "" {
+		if _, found := s.sentMessageCache.Get(msgId); found {
+			s.loggerWrapper.GetLogger(instance.Id).LogInfo("[%s] [CHATWOOT LOG] Ignoring outgoing WhatsApp event %s because it was originated from Chatwoot", instance.Id, msgId)
+			return nil
+		}
 	}
 
 	// Extrair ID de mensagem citada (Quoted Reply)
@@ -793,9 +804,15 @@ func (s *chatwootService) ProcessChatwootWebhook(instanceIdOrName string, payloa
 		return nil
 	}
 
-	// Filtra apenas mensagens de saída enviadas por agentes
+	// Filtra apenas mensagens de saída enviadas por agentes e ignora mensagens com source_id (já originadas pelo WhatsApp/EvolutionGO)
 	if webhookPayload.Event != "message_created" || webhookPayload.MessageType != "outgoing" || webhookPayload.Private {
 		return nil
+	}
+
+	if webhookPayload.ContentAttributes != nil {
+		if sid, ok := webhookPayload.ContentAttributes["source_id"].(string); ok && sid != "" {
+			return nil
+		}
 	}
 
 	instance, err := s.getInstance(instanceIdOrName)
@@ -945,9 +962,11 @@ func (s *chatwootService) ProcessChatwootWebhook(instanceIdOrName string, payloa
 				Filename: fmt.Sprintf("attachment_%d", att.ID),
 				Quoted:   quotedStruct,
 			}
-			_, err := s.sendService.SendMediaUrl(mediaData, instance)
+			res, err := s.sendService.SendMediaUrl(mediaData, instance)
 			if err != nil {
 				s.loggerWrapper.GetLogger(instance.Id).LogError("[%s] Erro ao enviar mídia via WhatsApp: %v", instance.Id, err)
+			} else if res != nil && res.ID != "" {
+				s.sentMessageCache.Set(res.ID, true, cache.DefaultExpiration)
 			}
 		}
 		return nil
@@ -960,10 +979,13 @@ func (s *chatwootService) ProcessChatwootWebhook(instanceIdOrName string, payloa
 			Text:   text,
 			Quoted: quotedStruct,
 		}
-		_, err := s.sendService.SendText(textData, instance)
+		res, err := s.sendService.SendText(textData, instance)
 		if err != nil {
 			s.loggerWrapper.GetLogger(instance.Id).LogError("[%s] Erro ao enviar texto via WhatsApp: %v", instance.Id, err)
 			return err
+		}
+		if res != nil && res.ID != "" {
+			s.sentMessageCache.Set(res.ID, true, cache.DefaultExpiration)
 		}
 	}
 
