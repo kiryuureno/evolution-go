@@ -1199,8 +1199,10 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 		recipientAltStr := evt.Info.RecipientAlt.String()
 
 		myPhoneNum := ""
-		if mycli.store != nil && mycli.store.ID != nil {
-			myPhoneNum = mycli.store.ID.User
+		if mycli.WAClient != nil && mycli.WAClient.Store != nil && mycli.WAClient.Store.ID != nil {
+			myPhoneNum = mycli.WAClient.Store.ID.User
+		} else if mycli.Instance != nil && mycli.Instance.Jid != "" {
+			myPhoneNum = strings.Split(strings.Split(mycli.Instance.Jid, "@")[0], ":")[0]
 		}
 
 		altPhoneJid := ""
