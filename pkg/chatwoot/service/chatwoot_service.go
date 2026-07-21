@@ -868,11 +868,37 @@ func (s *chatwootService) ProcessChatwootWebhook(instanceIdOrName string, payloa
 		}
 	}
 
+	// 3. Se o destinatário ainda for um LID de 15 dígitos, tentar buscar no Chatwoot por contatos reais vinculados a esse LID
+	if len(cleanNum) > 13 || strings.Contains(cleanNum, "lid") {
+		lidSearch := strings.Split(cleanNum, "@")[0]
+		searchUrl := fmt.Sprintf("%s/api/v1/accounts/%s/contacts/search?q=%s", instance.ChatwootUrl, instance.ChatwootAccountId, lidSearch)
+		req, _ := http.NewRequest("GET", searchUrl, nil)
+		req.Header.Set("api_access_token", instance.ChatwootToken)
+		client := &http.Client{Timeout: 5 * time.Second}
+		resp, err := client.Do(req)
+		if err == nil && resp.StatusCode == 200 {
+			bBytes, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			var searchRes chatwoot_model.ChatwootSearchContactResp
+			if json.Unmarshal(bBytes, &searchRes) == nil {
+				for _, c := range searchRes.Payload {
+					cleanP := strings.TrimPrefix(c.PhoneNumber, "+")
+					if cleanP != "" && len(cleanP) <= 13 && !strings.Contains(cleanP, "lid") {
+						cleanNum = cleanP
+						break
+					}
+				}
+			}
+		}
+	}
+
 	phoneNumber = cleanNum
 	if phoneNumber == "" {
 		s.loggerWrapper.GetLogger(instance.Id).LogError("[%s] Não foi possível enviar mensagem para o Chatwoot: conversa ID %d / contato ID %d sem destinatário válido", instance.Id, webhookPayload.Conversation.ID, webhookPayload.Contact.ID)
 		return fmt.Errorf("número de telefone ou grupo inválido para envio via WhatsApp")
 	}
+
+	s.loggerWrapper.GetLogger(instance.Id).LogInfo("[%s] [CHATWOOT LOG] Sending message from Chatwoot -> Recipient: %s, Text: %s", instance.Id, phoneNumber, webhookPayload.Content)
 
 	text := webhookPayload.Content
 	text = formatMarkdownToWhatsapp(text)

@@ -519,9 +519,16 @@ func (s *sendService) validateAndCheckUserExists(phone string, formatJid *bool, 
 		return validateMessageFields(phone, formatJid, messageID, participant)
 	}
 
-	// Skip WhatsApp check for group messages, broadcast, newsletter, and LID
-	if strings.Contains(phone, "@g.us") || strings.Contains(phone, "@broadcast") || strings.Contains(phone, "@newsletter") || strings.Contains(phone, "@lid") {
-		return validateMessageFields(phone, formatJid, messageID, participant)
+	cleanPhoneCheck := strings.TrimPrefix(phone, "+")
+	cleanPhoneCheck = strings.Split(cleanPhoneCheck, "@")[0]
+
+	// Skip WhatsApp check for group messages, broadcast, newsletter, and 15-digit LIDs
+	if strings.Contains(phone, "@g.us") || strings.Contains(phone, "@broadcast") || strings.Contains(phone, "@newsletter") || strings.Contains(phone, "@lid") || len(cleanPhoneCheck) > 13 {
+		lidJid := phone
+		if len(cleanPhoneCheck) > 13 && !strings.Contains(phone, "@") {
+			lidJid = fmt.Sprintf("%s@lid", cleanPhoneCheck)
+		}
+		return validateMessageFields(lidJid, formatJid, messageID, participant)
 	}
 
 	// Get the client to check if user exists on WhatsApp
