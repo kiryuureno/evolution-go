@@ -9,6 +9,8 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
+	"net/textproto"
+	"regexp"
 	"strings"
 	"time"
 
@@ -225,38 +227,88 @@ func (s *chatwootService) ProcessWhatsAppEvent(instance *instance_model.Instance
 	}
 
 	fromMe, _ := key["fromMe"].(bool)
-	remoteJid, _ := key["remoteJid"].(string)
+	keyJid, _ := key["remoteJid"].(string)
 
-	// Resolver JID real de telefone caso remoteJid seja um LID (ex: 260313823891664@lid -> 556399400537@s.whatsapp.net)
-	if chat, ok := data["Chat"].(string); ok && chat != "" && !strings.HasSuffix(chat, "@lid") {
-		remoteJid = chat
-	} else if !fromMe {
-		if sender, ok := data["Sender"].(string); ok && sender != "" && !strings.HasSuffix(sender, "@lid") {
-			remoteJid = sender
-		} else if senderAlt, ok := data["SenderAlt"].(string); ok && senderAlt != "" && !strings.HasSuffix(senderAlt, "@lid") {
-			remoteJid = senderAlt
-		}
-	}
-	pushName, _ := data["pushName"].(string)
-	if pushName == "" {
-		if pn, ok := data["PushName"].(string); ok && pn != "" {
-			pushName = pn
-		} else {
-			pushName = strings.Split(remoteJid, "@")[0]
-		}
+	// Resolver JID real de telefone do contato (ignorando LIDs e número próprio da instância)
+	targetJid := ""
+	myNumber := strings.Split(instance.Number, "@")[0]
+	if myNumber == "" && instance.OwnerJid != "" {
+		myNumber = strings.Split(instance.OwnerJid, "@")[0]
 	}
 
-	phoneNumber := "+" + strings.Split(remoteJid, "@")[0]
+	candidates := []string{}
+	if chat, ok := data["Chat"].(string); ok && chat != "" {
+		candidates = append(candidates, chat)
+	}
+	if chatAlt, ok := data["ChatAlt"].(string); ok && chatAlt != "" {
+		candidates = append(candidates, chatAlt)
+	}
+	if recipient, ok := data["Recipient"].(string); ok && recipient != "" {
+		candidates = append(candidates, recipient)
+	}
+	if recipientAlt, ok := data["RecipientAlt"].(string); ok && recipientAlt != "" {
+		candidates = append(candidates, recipientAlt)
+	}
+	if !fromMe {
+		if sender, ok := data["Sender"].(string); ok && sender != "" {
+			candidates = append(candidates, sender)
+		}
+		if senderAlt, ok := data["SenderAlt"].(string); ok && senderAlt != "" {
+			candidates = append(candidates, senderAlt)
+		}
+	}
+	if keyJid != "" {
+		candidates = append(candidates, keyJid)
+	}
+
+	for _, c := range candidates {
+		cClean := strings.Split(c, ":")[0]
+		userNum := strings.Split(cClean, "@")[0]
+		if !strings.HasSuffix(cClean, "@lid") && !strings.HasSuffix(cClean, "@broadcast") {
+			if myNumber != "" && (userNum == myNumber || strings.TrimPrefix(userNum, "55") == strings.TrimPrefix(myNumber, "55")) {
+				continue
+			}
+			targetJid = cClean
+			break
+		}
+	}
+
+	if targetJid == "" {
+		targetJid = strings.Split(keyJid, ":")[0]
+	}
+
+	if targetJid == "" || strings.HasSuffix(targetJid, "@broadcast") {
+		return nil
+	}
+
+	if instance.IgnoreGroups && strings.HasSuffix(targetJid, "@g.us") {
+		return nil
+	}
+
+	isGroup := strings.HasSuffix(targetJid, "@g.us")
+	if isGroup {
+		groupName := "Grupo WhatsApp"
+		if groupData, ok := data["groupData"].(map[string]interface{}); ok {
+			if subject, ok := groupData["Subject"].(string); ok && subject != "" {
+				groupName = subject
+			} else if name, ok := groupData["Name"].(string); ok && name != "" {
+				groupName = name
+			}
+		}
+		pushName = fmt.Sprintf("%s 👥 (GROUP)", groupName)
+	}
+
+	phoneNumber := "+" + strings.Split(targetJid, "@")[0]
 
 	// 1. Criar ou Buscar Contato no Chatwoot
-	contactId, err := s.findOrCreateContact(instance, pushName, phoneNumber, remoteJid)
+	contactId, err := s.findOrCreateContact(instance, pushName, phoneNumber, targetJid)
 	if err != nil {
 		s.loggerWrapper.GetLogger(instance.Id).LogError("[%s] Erro ao buscar/criar contato no Chatwoot: %v", instance.Id, err)
 		return err
 	}
 
 	// 2. Criar ou Buscar Conversa no Chatwoot
-	conversationId, err := s.findOrCreateConversation(instance, contactId, remoteJid)
+	conversationId, err := s.findOrCreateConversation(instance, contactId, targetJid)
 	if err != nil {
 		s.loggerWrapper.GetLogger(instance.Id).LogError("[%s] Erro ao buscar/criar conversa no Chatwoot: %v", instance.Id, err)
 		return err
@@ -266,6 +318,17 @@ func (s *chatwootService) ProcessWhatsAppEvent(instance *instance_model.Instance
 	content := extractTextFromMessageData(data)
 	if content == "" {
 		content = "[Mídia / Mensagem não suportada]"
+	}
+
+	// Se for grupo e mensagem recebida de outro participante, prefixar o nome do remetente
+	if isGroup && !fromMe {
+		senderName := "Participante"
+		if pn, ok := data["pushName"].(string); ok && pn != "" {
+			senderName = pn
+		} else if pn, ok := data["PushName"].(string); ok && pn != "" {
+			senderName = pn
+		}
+		content = fmt.Sprintf("*%s*: %s", senderName, content)
 	}
 
 	msgType := "incoming"
@@ -278,14 +341,30 @@ func (s *chatwootService) ProcessWhatsAppEvent(instance *instance_model.Instance
 		msgId = id
 	}
 
+	// Extrair ID de mensagem citada (Quoted Reply)
+	quotedStanzaId := ""
+	if msg, ok := data["message"].(map[string]interface{}); ok {
+		if ctxInfo, ok := msg["contextInfo"].(map[string]interface{}); ok {
+			if stanzaId, ok := ctxInfo["stanzaId"].(string); ok && stanzaId != "" {
+				quotedStanzaId = stanzaId
+			}
+		}
+	} else if msg, ok := data["Message"].(map[string]interface{}); ok {
+		if ctxInfo, ok := msg["contextInfo"].(map[string]interface{}); ok {
+			if stanzaId, ok := ctxInfo["stanzaId"].(string); ok && stanzaId != "" {
+				quotedStanzaId = stanzaId
+			}
+		}
+	}
+
 	// Tentar extrair mídia (imagem, áudio, vídeo, documento, figurinha) se houver no payload
 	mediaBytes, filename, mimeType := extractMediaFromMessageData(data)
 	if len(mediaBytes) > 0 {
-		return s.postMediaMessageToChatwoot(instance, conversationId, content, msgType, msgId, mediaBytes, filename, mimeType)
+		return s.postMediaMessageToChatwoot(instance, conversationId, content, msgType, msgId, quotedStanzaId, mediaBytes, filename, mimeType)
 	}
 
 	// 4. Enviar Mensagem de texto simples para o Chatwoot
-	return s.postMessageToChatwoot(instance, conversationId, content, msgType, msgId)
+	return s.postMessageToChatwoot(instance, conversationId, content, msgType, msgId, quotedStanzaId)
 }
 
 func (s *chatwootService) findOrCreateContact(instance *instance_model.Instance, name, phoneNumber, identifier string) (int, error) {
@@ -467,13 +546,19 @@ func (s *chatwootService) toggleConversationStatus(instance *instance_model.Inst
 	return nil
 }
 
-func (s *chatwootService) postMessageToChatwoot(instance *instance_model.Instance, conversationId int, content, messageType, sourceId string) error {
+func (s *chatwootService) postMessageToChatwoot(instance *instance_model.Instance, conversationId int, content, messageType, sourceId, quotedStanzaId string) error {
 	url := fmt.Sprintf("%s/api/v1/accounts/%s/conversations/%d/messages", instance.ChatwootUrl, instance.ChatwootAccountId, conversationId)
 	msgReq := chatwoot_model.ChatwootMessageReq{
 		Content:     content,
 		MessageType: messageType,
 		Private:     false,
 		SourceID:    sourceId,
+	}
+
+	if quotedStanzaId != "" {
+		msgReq.ContentAttributes = map[string]interface{}{
+			"in_reply_to_external_id": quotedStanzaId,
+		}
 	}
 
 	bodyBytes, _ := json.Marshal(msgReq)
@@ -500,7 +585,7 @@ func (s *chatwootService) postMessageToChatwoot(instance *instance_model.Instanc
 	return nil
 }
 
-func (s *chatwootService) postMediaMessageToChatwoot(instance *instance_model.Instance, conversationId int, content, messageType, sourceId string, mediaBytes []byte, filename, mimeType string) error {
+func (s *chatwootService) postMediaMessageToChatwoot(instance *instance_model.Instance, conversationId int, content, messageType, sourceId, quotedStanzaId string, mediaBytes []byte, filename, mimeType string) error {
 	url := fmt.Sprintf("%s/api/v1/accounts/%s/conversations/%d/messages", instance.ChatwootUrl, instance.ChatwootAccountId, conversationId)
 
 	body := &bytes.Buffer{}
@@ -515,8 +600,21 @@ func (s *chatwootService) postMediaMessageToChatwoot(instance *instance_model.In
 		_ = writer.WriteField("source_id", sourceId)
 	}
 
+	if quotedStanzaId != "" {
+		attrJSON, _ := json.Marshal(map[string]interface{}{
+			"in_reply_to_external_id": quotedStanzaId,
+		})
+		_ = writer.WriteField("content_attributes", string(attrJSON))
+	}
+
 	if len(mediaBytes) > 0 {
-		part, err := writer.CreateFormFile("attachments[]", filename)
+		if mimeType == "" {
+			mimeType = "application/octet-stream"
+		}
+		h := make(textproto.MIMEHeader)
+		h.Set("Content-Disposition", fmt.Sprintf(`form-data; name="attachments[]"; filename="%s"`, filename))
+		h.Set("Content-Type", mimeType)
+		part, err := writer.CreatePart(h)
 		if err == nil {
 			_, _ = part.Write(mediaBytes)
 		}
@@ -579,8 +677,32 @@ func (s *chatwootService) ProcessChatwootWebhook(instanceIdOrName string, payloa
 	}
 
 	text := webhookPayload.Content
+	text = formatMarkdownToWhatsapp(text)
+
 	if instance.ChatwootSignMsg && webhookPayload.Sender.Name != "" && webhookPayload.Sender.Type == "user" {
 		text = fmt.Sprintf("*%s*: %s", webhookPayload.Sender.Name, text)
+	}
+
+	// Extrair ID de mensagem citada (Quoted Reply no Chatwoot)
+	quotedStanzaId := ""
+	if webhookPayload.ContentAttributes != nil {
+		if inReplyTo, ok := webhookPayload.ContentAttributes["in_reply_to_external_id"].(string); ok && inReplyTo != "" {
+			quotedStanzaId = inReplyTo
+		}
+	}
+	if quotedStanzaId == "" && webhookPayload.InReplyTo != nil {
+		if inReplyMap, ok := webhookPayload.InReplyTo.(map[string]interface{}); ok {
+			if sourceId, ok := inReplyMap["source_id"].(string); ok && sourceId != "" {
+				quotedStanzaId = sourceId
+			}
+		}
+	}
+
+	var quotedStruct send_service.QuotedStruct
+	if quotedStanzaId != "" {
+		quotedStruct = send_service.QuotedStruct{
+			MessageID: quotedStanzaId,
+		}
 	}
 
 	// Se houver anexos de mídia (imagem, vídeo, áudio, arquivo)
@@ -597,6 +719,7 @@ func (s *chatwootService) ProcessChatwootWebhook(instanceIdOrName string, payloa
 				Caption:  text,
 				Type:     getMediaType(att.FileType),
 				Filename: fmt.Sprintf("attachment_%d", att.ID),
+				Quoted:   quotedStruct,
 			}
 			_, err := s.sendService.SendMediaUrl(mediaData, instance)
 			if err != nil {
@@ -611,6 +734,7 @@ func (s *chatwootService) ProcessChatwootWebhook(instanceIdOrName string, payloa
 		textData := &send_service.TextStruct{
 			Number: phoneNumber,
 			Text:   text,
+			Quoted: quotedStruct,
 		}
 		_, err := s.sendService.SendText(textData, instance)
 		if err != nil {
@@ -620,6 +744,19 @@ func (s *chatwootService) ProcessChatwootWebhook(instanceIdOrName string, payloa
 	}
 
 	return nil
+}
+
+func formatMarkdownToWhatsapp(text string) string {
+	if text == "" {
+		return ""
+	}
+	reBold := regexp.MustCompile(`\*\*(.*?)\*\*`)
+	text = reBold.ReplaceAllString(text, "*$1*")
+
+	reStrike := regexp.MustCompile(`~~(.*?)~~`)
+	text = reStrike.ReplaceAllString(text, "~$1~")
+
+	return text
 }
 
 func (s *chatwootService) SyncContacts(instanceId string) error {
@@ -767,11 +904,45 @@ func extractMediaFromMessageData(data map[string]interface{}) ([]byte, string, s
 		b64Str = b64
 	}
 
-	mimeType := "application/octet-stream"
+	mimeType := ""
 	if mime, ok := msg["mimetype"].(string); ok && mime != "" {
 		mimeType = mime
 	} else if mime, ok := data["mimetype"].(string); ok && mime != "" {
 		mimeType = mime
+	}
+
+	if mimeType == "" {
+		if img, ok := msg["imageMessage"].(map[string]interface{}); ok {
+			if m, ok := img["mimetype"].(string); ok && m != "" {
+				mimeType = m
+			} else {
+				mimeType = "image/jpeg"
+			}
+		} else if audio, ok := msg["audioMessage"].(map[string]interface{}); ok {
+			if m, ok := audio["mimetype"].(string); ok && m != "" {
+				mimeType = m
+			} else {
+				mimeType = "audio/ogg"
+			}
+		} else if video, ok := msg["videoMessage"].(map[string]interface{}); ok {
+			if m, ok := video["mimetype"].(string); ok && m != "" {
+				mimeType = m
+			} else {
+				mimeType = "video/mp4"
+			}
+		} else if doc, ok := msg["documentMessage"].(map[string]interface{}); ok {
+			if m, ok := doc["mimetype"].(string); ok && m != "" {
+				mimeType = m
+			} else {
+				mimeType = "application/pdf"
+			}
+		} else if sticker, ok := msg["stickerMessage"].(map[string]interface{}); ok {
+			if m, ok := sticker["mimetype"].(string); ok && m != "" {
+				mimeType = m
+			} else {
+				mimeType = "image/webp"
+			}
+		}
 	}
 
 	var mediaBytes []byte
@@ -792,21 +963,36 @@ func extractMediaFromMessageData(data map[string]interface{}) ([]byte, string, s
 		return nil, "", ""
 	}
 
-	ext := ".bin"
-	if strings.Contains(mimeType, "jpeg") || strings.Contains(mimeType, "jpg") {
-		ext = ".jpg"
-	} else if strings.Contains(mimeType, "png") {
-		ext = ".png"
-	} else if strings.Contains(mimeType, "webp") {
-		ext = ".webp"
-	} else if strings.Contains(mimeType, "ogg") || strings.Contains(mimeType, "audio") {
-		ext = ".ogg"
-	} else if strings.Contains(mimeType, "mp4") || strings.Contains(mimeType, "video") {
-		ext = ".mp4"
-	} else if strings.Contains(mimeType, "pdf") {
-		ext = ".pdf"
+	filename := ""
+	if doc, ok := msg["documentMessage"].(map[string]interface{}); ok {
+		if title, ok := doc["title"].(string); ok && title != "" {
+			filename = title
+		} else if fn, ok := doc["fileName"].(string); ok && fn != "" {
+			filename = fn
+		}
 	}
 
-	filename := fmt.Sprintf("media_%d%s", time.Now().UnixNano(), ext)
+	if filename == "" {
+		ext := ".bin"
+		if strings.Contains(mimeType, "jpeg") || strings.Contains(mimeType, "jpg") {
+			ext = ".jpg"
+		} else if strings.Contains(mimeType, "png") {
+			ext = ".png"
+		} else if strings.Contains(mimeType, "webp") {
+			ext = ".webp"
+		} else if strings.Contains(mimeType, "ogg") || strings.Contains(mimeType, "opus") || strings.Contains(mimeType, "audio") {
+			ext = ".ogg"
+		} else if strings.Contains(mimeType, "mp4") || strings.Contains(mimeType, "video") {
+			ext = ".mp4"
+		} else if strings.Contains(mimeType, "pdf") {
+			ext = ".pdf"
+		}
+		filename = fmt.Sprintf("media_%d%s", time.Now().UnixNano(), ext)
+	}
+
+	if mimeType == "" {
+		mimeType = "application/octet-stream"
+	}
+
 	return mediaBytes, filename, mimeType
 }

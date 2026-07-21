@@ -82,22 +82,26 @@ type ChatwootConversationSearchResp struct {
 
 // Structs para Envio de Mensagens no Chatwoot
 type ChatwootMessageReq struct {
-	Content     string `json:"content"`
-	MessageType string `json:"message_type"` // "incoming" ou "outgoing"
-	Private     bool   `json:"private"`
-	SourceID    string `json:"source_id,omitempty"`
+	Content           string                 `json:"content"`
+	MessageType       string                 `json:"message_type"` // "incoming" ou "outgoing"
+	Private           bool                   `json:"private"`
+	SourceID          string                 `json:"source_id,omitempty"`
+	ContentAttributes map[string]interface{} `json:"content_attributes,omitempty"`
 }
 
 // Structs para Webhook do Chatwoot (Chatwoot -> EvolutionGO)
 type ChatwootWebhookPayload struct {
-	Event        string                      `json:"event"`
-	MessageType  string                      `json:"message_type"`
-	Content      string                      `json:"content"`
-	Private      bool                        `json:"private"`
-	Sender       ChatwootWebhookSender       `json:"sender"`
-	Contact      ChatwootWebhookContact      `json:"contact"`
-	Conversation ChatwootWebhookConversation `json:"conversation"`
-	Attachments  []ChatwootWebhookAttachment `json:"attachments"`
+	ID                int                         `json:"id,omitempty"`
+	Event             string                      `json:"event"`
+	MessageType       string                      `json:"message_type"`
+	Content           string                      `json:"content"`
+	Private           bool                        `json:"private"`
+	ContentAttributes map[string]interface{}    `json:"content_attributes,omitempty"`
+	InReplyTo         interface{}                 `json:"in_reply_to,omitempty"`
+	Sender            ChatwootWebhookSender       `json:"sender"`
+	Contact           ChatwootWebhookContact      `json:"contact"`
+	Conversation      ChatwootWebhookConversation `json:"conversation"`
+	Attachments       []ChatwootWebhookAttachment `json:"attachments"`
 }
 
 type ChatwootWebhookSender struct {
