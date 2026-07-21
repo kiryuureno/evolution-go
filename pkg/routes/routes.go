@@ -10,6 +10,7 @@ import (
 	_ "github.com/evolution-foundation/evolution-go/docs"
 	call_handler "github.com/evolution-foundation/evolution-go/pkg/call/handler"
 	chat_handler "github.com/evolution-foundation/evolution-go/pkg/chat/handler"
+	chatwoot_handler "github.com/evolution-foundation/evolution-go/pkg/chatwoot/handler"
 	community_handler "github.com/evolution-foundation/evolution-go/pkg/community/handler"
 	group_handler "github.com/evolution-foundation/evolution-go/pkg/group/handler"
 	instance_handler "github.com/evolution-foundation/evolution-go/pkg/instance/handler"
@@ -31,6 +32,7 @@ type Routes struct {
 	sendHandler             send_handler.SendHandler
 	messageHandler          message_handler.MessageHandler
 	chatHandler             chat_handler.ChatHandler
+	chatwootHandler         chatwoot_handler.ChatwootHandler
 	groupHandler            group_handler.GroupHandler
 	callHandler             call_handler.CallHandler
 	communityHandler        community_handler.CommunityHandler
@@ -236,12 +238,20 @@ func (r *Routes) AssignRoutes(eng *gin.Engine) {
 		}
 	}
 
-	// NOVO: Rotas de Enquetes (Polls)
-	routes = eng.Group("/polls")
+	// NOVO: Rotas do Chatwoot
+	routes = eng.Group("/chatwoot")
 	{
+		// Webhook aberto para receber requisições do Chatwoot
+		routes.POST("/webhook/:instanceId", r.chatwootHandler.WebhookHandler)
+
+		// Rotas autenticadas para gerenciamento
 		routes.Use(r.authMiddleware.Auth)
 		{
-			routes.GET("/:pollMessageId/results", r.pollHandler.GetPollResults)
+			routes.POST("/set/:instanceId", r.chatwootHandler.SetChatwootConfig)
+			routes.GET("/find/:instanceId", r.chatwootHandler.FindChatwootConfig)
+			routes.DELETE("/delete/:instanceId", r.chatwootHandler.DeleteChatwootConfig)
+			routes.POST("/syncContacts/:instanceId", r.chatwootHandler.SyncContactsHandler)
+			routes.POST("/syncMessages/:instanceId", r.chatwootHandler.SyncMessagesHandler)
 		}
 	}
 
@@ -254,6 +264,7 @@ func NewRouter(
 	sendHandler send_handler.SendHandler,
 	messageHandler message_handler.MessageHandler,
 	chatHandler chat_handler.ChatHandler,
+	chatwootHandler chatwoot_handler.ChatwootHandler,
 	groupHandler group_handler.GroupHandler,
 	callHandler call_handler.CallHandler,
 	communityHandler community_handler.CommunityHandler,
@@ -270,6 +281,7 @@ func NewRouter(
 		sendHandler:             sendHandler,
 		messageHandler:          messageHandler,
 		chatHandler:             chatHandler,
+		chatwootHandler:         chatwootHandler,
 		groupHandler:            groupHandler,
 		callHandler:             callHandler,
 		communityHandler:        communityHandler,

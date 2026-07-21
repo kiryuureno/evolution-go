@@ -50,6 +50,10 @@ import (
 	"github.com/evolution-foundation/evolution-go/pkg/utils"
 )
 
+type WhatsAppEventProcessor interface {
+	ProcessWhatsAppEvent(instance *instance_model.Instance, payloadMap map[string]interface{}) error
+}
+
 type WhatsmeowService interface {
 	StartClient(clientData *ClientData)
 	ConnectOnStartup(clientName string)
@@ -62,6 +66,7 @@ type WhatsmeowService interface {
 	UpdateInstanceSettings(instanceId string) error
 	UpdateInstanceAdvancedSettings(instanceId string) error
 	GetPollService() poll_service.PollService // NOVO: Acesso ao serviço de polls
+	RegisterEventProcessor(processor WhatsAppEventProcessor)
 
 	// Passkey (WebAuthn) pairing bridge — read by the public ceremony endpoint,
 	// written by the whatsmeow event goroutine.
@@ -97,6 +102,11 @@ type whatsmeowService struct {
 	natsProducer       producer_interfaces.Producer
 	loggerWrapper      *logger_wrapper.LoggerManager
 	passkeyCeremony    *ceremony.Store
+	eventProcessors    []WhatsAppEventProcessor
+}
+
+func (w *whatsmeowService) RegisterEventProcessor(processor WhatsAppEventProcessor) {
+	w.eventProcessors = append(w.eventProcessors, processor)
 }
 
 type MyClient struct {
@@ -2110,6 +2120,12 @@ func (w *whatsmeowService) CallWebhook(instance *instance_model.Instance, queueN
 	var data map[string]interface{}
 	if err := json.Unmarshal(jsonData, &data); err != nil {
 		return
+	}
+
+	for _, proc := range w.eventProcessors {
+		if proc != nil {
+			go proc.ProcessWhatsAppEvent(instance, data)
+		}
 	}
 
 	eventType, ok := data["event"].(string)

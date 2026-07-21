@@ -25,6 +25,8 @@ import (
 	call_service "github.com/evolution-foundation/evolution-go/pkg/call/service"
 	chat_handler "github.com/evolution-foundation/evolution-go/pkg/chat/handler"
 	chat_service "github.com/evolution-foundation/evolution-go/pkg/chat/service"
+	chatwoot_handler "github.com/evolution-foundation/evolution-go/pkg/chatwoot/handler"
+	chatwoot_service "github.com/evolution-foundation/evolution-go/pkg/chatwoot/service"
 	community_handler "github.com/evolution-foundation/evolution-go/pkg/community/handler"
 	community_service "github.com/evolution-foundation/evolution-go/pkg/community/service"
 	config "github.com/evolution-foundation/evolution-go/pkg/config"
@@ -197,6 +199,10 @@ func setupRouter(db *gorm.DB, authDB *sql.DB, sqliteDB *sql.DB, config *config.C
 	labelService := label_service.NewLabelService(clientPointer, whatsmeowService, labelRepository, loggerWrapper)
 	newsletterService := newsletter_service.NewNewsletterService(clientPointer, whatsmeowService, loggerWrapper)
 
+	chatwootService := chatwoot_service.NewChatwootService(instanceRepository, sendMessageService, loggerWrapper)
+	whatsmeowService.RegisterEventProcessor(chatwootService)
+	chatwootHandler := chatwoot_handler.NewChatwootHandler(chatwootService)
+
 	// NOVO: PollHandler usando PollService já inicializado no whatsmeowService (evita dupla inicialização)
 	pollHandler := poll_handler.NewPollHandler(whatsmeowService.GetPollService(), loggerWrapper)
 
@@ -232,6 +238,7 @@ func setupRouter(db *gorm.DB, authDB *sql.DB, sqliteDB *sql.DB, config *config.C
 		send_handler.NewSendHandler(sendMessageService),
 		message_handler.NewMessageHandler(messageService),
 		chat_handler.NewChatHandler(chatService),
+		chatwootHandler,
 		group_handler.NewGroupHandler(groupService),
 		call_handler.NewCallHandler(callService),
 		community_handler.NewCommunityHandler(communityService),
