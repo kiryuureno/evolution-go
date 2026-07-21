@@ -343,6 +343,41 @@ func (s *chatwootService) findOrCreateContact(instance *instance_model.Instance,
 }
 
 func (s *chatwootService) findOrCreateConversation(instance *instance_model.Instance, contactId int, sourceId string) (int, error) {
+	// 1. Tentar buscar conversas ativas do contato no Chatwoot para agrupamento na mesma thread
+	getConvUrl := fmt.Sprintf("%s/api/v1/accounts/%s/contacts/%d/conversations", instance.ChatwootUrl, instance.ChatwootAccountId, contactId)
+	req, err := http.NewRequest("GET", getConvUrl, nil)
+	if err == nil {
+		req.Header.Set("api_access_token", instance.ChatwootToken)
+		client := &http.Client{Timeout: 10 * time.Second}
+		resp, err := client.Do(req)
+		if err == nil {
+			if resp.StatusCode == 200 {
+				var convSearchRes struct {
+					Payload []chatwoot_model.ChatwootConversationResp `json:"payload"`
+				}
+				if json.NewDecoder(resp.Body).Decode(&convSearchRes) == nil {
+					resp.Body.Close()
+					for _, conv := range convSearchRes.Payload {
+						if conv.InboxID == instance.ChatwootInboxId {
+							if conv.Status == "open" || conv.Status == "pending" || conv.Status == "snoozed" {
+								return conv.ID, nil
+							}
+							if conv.Status == "resolved" && instance.ChatwootReopenConversation {
+								_ = s.toggleConversationStatus(instance, conv.ID, "open")
+								return conv.ID, nil
+							}
+						}
+					}
+				} else {
+					resp.Body.Close()
+				}
+			} else {
+				resp.Body.Close()
+			}
+		}
+	}
+
+	// 2. Se não houver conversa aberta para este contato na caixa de entrada, criar uma nova
 	url := fmt.Sprintf("%s/api/v1/accounts/%s/conversations", instance.ChatwootUrl, instance.ChatwootAccountId)
 	convReq := chatwoot_model.ChatwootConversationReq{
 		SourceId:  sourceId,
@@ -354,7 +389,7 @@ func (s *chatwootService) findOrCreateConversation(instance *instance_model.Inst
 	}
 
 	bodyBytes, _ := json.Marshal(convReq)
-	req, err := http.NewRequest("POST", url, bytes.NewBuffer(bodyBytes))
+	req, err = http.NewRequest("POST", url, bytes.NewBuffer(bodyBytes))
 	if err != nil {
 		return 0, err
 	}
@@ -375,6 +410,28 @@ func (s *chatwootService) findOrCreateConversation(instance *instance_model.Inst
 	}
 
 	return convResp.ID, nil
+}
+
+func (s *chatwootService) toggleConversationStatus(instance *instance_model.Instance, conversationId int, status string) error {
+	url := fmt.Sprintf("%s/api/v1/accounts/%s/conversations/%d/toggle_status", instance.ChatwootUrl, instance.ChatwootAccountId, conversationId)
+	bodyMap := map[string]string{"status": status}
+	bodyBytes, _ := json.Marshal(bodyMap)
+
+	req, err := http.NewRequest("POST", url, bytes.NewBuffer(bodyBytes))
+	if err != nil {
+		return err
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("api_access_token", instance.ChatwootToken)
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	return nil
 }
 
 func (s *chatwootService) postMessageToChatwoot(instance *instance_model.Instance, conversationId int, content, messageType, sourceId string) error {
