@@ -82,4 +82,4 @@ jobs:
             VERSION=${{ steps.version.outputs.version }}
 
       - name: Output Image Digest
-        run: echo "Imagem gerada com sucesso. Digest: ${{ steps.docker_build.outputs.digest }}"
+        run: echo "Imagem gerada com sucesso!. Digest: ${{ steps.docker_build.outputs.digest }}"
