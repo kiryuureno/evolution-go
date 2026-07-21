@@ -231,10 +231,7 @@ func (s *chatwootService) ProcessWhatsAppEvent(instance *instance_model.Instance
 
 	// Resolver JID real de telefone do contato (ignorando LIDs e número próprio da instância)
 	targetJid := ""
-	myNumber := strings.Split(instance.Number, "@")[0]
-	if myNumber == "" && instance.OwnerJid != "" {
-		myNumber = strings.Split(instance.OwnerJid, "@")[0]
-	}
+	myNumber := strings.Split(instance.Jid, "@")[0]
 
 	candidates := []string{}
 	if chat, ok := data["Chat"].(string); ok && chat != "" {
@@ -283,6 +280,15 @@ func (s *chatwootService) ProcessWhatsAppEvent(instance *instance_model.Instance
 
 	if instance.IgnoreGroups && strings.HasSuffix(targetJid, "@g.us") {
 		return nil
+	}
+
+	pushName, _ := data["pushName"].(string)
+	if pushName == "" {
+		if pn, ok := data["PushName"].(string); ok && pn != "" {
+			pushName = pn
+		} else {
+			pushName = strings.Split(targetJid, "@")[0]
+		}
 	}
 
 	isGroup := strings.HasSuffix(targetJid, "@g.us")
