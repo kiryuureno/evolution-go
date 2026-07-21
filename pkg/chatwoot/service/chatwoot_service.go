@@ -2,10 +2,12 @@ package chatwoot_service
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"strings"
 	"time"
@@ -267,23 +269,18 @@ func (s *chatwootService) ProcessWhatsAppEvent(instance *instance_model.Instance
 		return err
 	}
 
-	// 3. Extrair Conteúdo da Mensagem
-	content := extractTextFromMessageData(data)
-	if content == "" {
-		content = "[Mídia / Mensagem não suportada]"
-	}
-
-	msgType := "incoming"
-	if fromMe {
-		msgType = "outgoing"
-	}
-
 	msgId := ""
 	if id, ok := key["id"].(string); ok {
 		msgId = id
 	}
 
-	// 4. Enviar Mensagem para o Chatwoot
+	// Tentar extrair mídia (imagem, áudio, vídeo, documento, figurinha) se houver no payload
+	mediaBytes, filename, mimeType := extractMediaFromMessageData(data)
+	if len(mediaBytes) > 0 {
+		return s.postMediaMessageToChatwoot(instance, conversationId, content, msgType, msgId, mediaBytes, filename, mimeType)
+	}
+
+	// 4. Enviar Mensagem de texto simples para o Chatwoot
 	return s.postMessageToChatwoot(instance, conversationId, content, msgType, msgId)
 }
 
@@ -467,6 +464,53 @@ func (s *chatwootService) postMessageToChatwoot(instance *instance_model.Instanc
 	return nil
 }
 
+func (s *chatwootService) postMediaMessageToChatwoot(instance *instance_model.Instance, conversationId int, content, messageType, sourceId string, mediaBytes []byte, filename, mimeType string) error {
+	url := fmt.Sprintf("%s/api/v1/accounts/%s/conversations/%d/messages", instance.ChatwootUrl, instance.ChatwootAccountId, conversationId)
+
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+
+	if content != "" {
+		_ = writer.WriteField("content", content)
+	}
+	_ = writer.WriteField("message_type", messageType)
+	_ = writer.WriteField("private", "false")
+	if sourceId != "" {
+		_ = writer.WriteField("source_id", sourceId)
+	}
+
+	if len(mediaBytes) > 0 {
+		part, err := writer.CreateFormFile("attachments[]", filename)
+		if err == nil {
+			_, _ = part.Write(mediaBytes)
+		}
+	}
+
+	_ = writer.Close()
+
+	req, err := http.NewRequest("POST", url, body)
+	if err != nil {
+		return err
+	}
+
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	req.Header.Set("api_access_token", instance.ChatwootToken)
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		b, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("erro ao postar mídia no chatwoot status %d: %s", resp.StatusCode, string(b))
+	}
+
+	return nil
+}
+
 func (s *chatwootService) ProcessChatwootWebhook(instanceIdOrName string, payload []byte) error {
 	var webhookPayload chatwoot_model.ChatwootWebhookPayload
 	err := json.Unmarshal(payload, &webhookPayload)
@@ -506,9 +550,14 @@ func (s *chatwootService) ProcessChatwootWebhook(instanceIdOrName string, payloa
 	// Se houver anexos de mídia (imagem, vídeo, áudio, arquivo)
 	if len(webhookPayload.Attachments) > 0 {
 		for _, att := range webhookPayload.Attachments {
+			fullUrl := att.DataUrl
+			if !strings.HasPrefix(fullUrl, "http://") && !strings.HasPrefix(fullUrl, "https://") {
+				fullUrl = fmt.Sprintf("%s%s", strings.TrimSuffix(instance.ChatwootUrl, "/"), att.DataUrl)
+			}
+
 			mediaData := &send_service.MediaStruct{
 				Number:   phoneNumber,
-				Url:      att.DataUrl,
+				Url:      fullUrl,
 				Caption:  text,
 				Type:     getMediaType(att.FileType),
 				Filename: fmt.Sprintf("attachment_%d", att.ID),
@@ -664,4 +713,64 @@ func getMediaType(fileType string) string {
 	default:
 		return "document"
 	}
+}
+
+func extractMediaFromMessageData(data map[string]interface{}) ([]byte, string, string) {
+	msg, ok := data["message"].(map[string]interface{})
+	if !ok || msg == nil {
+		msg, ok = data["Message"].(map[string]interface{})
+		if !ok || msg == nil {
+			return nil, "", ""
+		}
+	}
+
+	b64Str := ""
+	if b64, ok := msg["base64"].(string); ok && b64 != "" {
+		b64Str = b64
+	} else if b64, ok := data["base64"].(string); ok && b64 != "" {
+		b64Str = b64
+	}
+
+	mimeType := "application/octet-stream"
+	if mime, ok := msg["mimetype"].(string); ok && mime != "" {
+		mimeType = mime
+	} else if mime, ok := data["mimetype"].(string); ok && mime != "" {
+		mimeType = mime
+	}
+
+	var mediaBytes []byte
+	if b64Str != "" {
+		if idx := strings.Index(b64Str, ","); idx != -1 {
+			b64Str = b64Str[idx+1:]
+		}
+		mediaBytes, _ = base64.StdEncoding.DecodeString(b64Str)
+	} else if mediaUrl, ok := msg["mediaUrl"].(string); ok && mediaUrl != "" {
+		resp, err := http.Get(mediaUrl)
+		if err == nil && resp.StatusCode == 200 {
+			mediaBytes, _ = io.ReadAll(resp.Body)
+			resp.Body.Close()
+		}
+	}
+
+	if len(mediaBytes) == 0 {
+		return nil, "", ""
+	}
+
+	ext := ".bin"
+	if strings.Contains(mimeType, "jpeg") || strings.Contains(mimeType, "jpg") {
+		ext = ".jpg"
+	} else if strings.Contains(mimeType, "png") {
+		ext = ".png"
+	} else if strings.Contains(mimeType, "webp") {
+		ext = ".webp"
+	} else if strings.Contains(mimeType, "ogg") || strings.Contains(mimeType, "audio") {
+		ext = ".ogg"
+	} else if strings.Contains(mimeType, "mp4") || strings.Contains(mimeType, "video") {
+		ext = ".mp4"
+	} else if strings.Contains(mimeType, "pdf") {
+		ext = ".pdf"
+	}
+
+	filename := fmt.Sprintf("media_%d%s", time.Now().UnixNano(), ext)
+	return mediaBytes, filename, mimeType
 }
