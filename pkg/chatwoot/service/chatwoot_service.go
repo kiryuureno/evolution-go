@@ -372,6 +372,8 @@ func (s *chatwootService) ProcessWhatsAppEvent(instance *instance_model.Instance
 		}
 	}
 
+	s.loggerWrapper.GetLogger(instance.Id).LogInfo("[%s] [CHATWOOT LOG] WA Event -> ID: %s, FromMe: %v, TargetJid: %s, AltLid: %s, PushName: %s, Content: %s", instance.Id, msgId, fromMe, targetJid, altLid, pushName, content)
+
 	// Tentar extrair mídia (imagem, áudio, vídeo, documento, figurinha) se houver no payload
 	mediaBytes, filename, mimeType := extractMediaFromMessageData(data)
 	if len(mediaBytes) > 0 {
@@ -930,6 +932,44 @@ func extractTextFromMessageData(data map[string]interface{}) string {
 		}
 	}
 
+	// 1. Reações a Mensagens (ReactionMessage)
+	if reactionMsg, ok := msg["reactionMessage"].(map[string]interface{}); ok {
+		if emoji, ok := reactionMsg["text"].(string); ok && emoji != "" {
+			return fmt.Sprintf("Reagiu com %s", emoji)
+		}
+		return "Removeu a reação"
+	}
+
+	// 2. Apagar/Revogar Mensagens (ProtocolMessage REVOKE) ou Mensagens Editadas
+	if protoMsg, ok := msg["protocolMessage"].(map[string]interface{}); ok {
+		pType, _ := protoMsg["type"].(string)
+		if pType == "REVOKE" || pType == "0" {
+			return "🗑️ Mensagem apagada no WhatsApp"
+		}
+		if edMsg, ok := protoMsg["editedMessage"].(map[string]interface{}); ok {
+			if conv, ok := edMsg["conversation"].(string); ok && conv != "" {
+				return fmt.Sprintf("✏️ [Mensagem Editada]: %s", conv)
+			}
+			if extMsg, ok := edMsg["extendedTextMessage"].(map[string]interface{}); ok {
+				if text, ok := extMsg["text"].(string); ok && text != "" {
+					return fmt.Sprintf("✏️ [Mensagem Editada]: %s", text)
+				}
+			}
+		}
+	}
+
+	// 3. Mensagem Editada (EditedMessage direta)
+	if edMsg, ok := msg["editedMessage"].(map[string]interface{}); ok {
+		if conv, ok := edMsg["conversation"].(string); ok && conv != "" {
+			return fmt.Sprintf("✏️ [Mensagem Editada]: %s", conv)
+		}
+		if extMsg, ok := edMsg["extendedTextMessage"].(map[string]interface{}); ok {
+			if text, ok := extMsg["text"].(string); ok && text != "" {
+				return fmt.Sprintf("✏️ [Mensagem Editada]: %s", text)
+			}
+		}
+	}
+
 	if imageMsg, ok := msg["imageMessage"].(map[string]interface{}); ok {
 		if caption, ok := imageMsg["caption"].(string); ok && caption != "" {
 			return fmt.Sprintf("[Imagem]: %s", caption)
@@ -972,6 +1012,13 @@ func extractTextFromMessageData(data map[string]interface{}) string {
 			return fmt.Sprintf("[Contato]: %s", displayName)
 		}
 		return "[Contato]"
+	}
+
+	if contactsArrayMsg, ok := msg["contactsArrayMessage"].(map[string]interface{}); ok {
+		if displayName, ok := contactsArrayMsg["displayName"].(string); ok && displayName != "" {
+			return fmt.Sprintf("[Contatos]: %s", displayName)
+		}
+		return "[Contatos Compartilhados]"
 	}
 
 	if locationMsg, ok := msg["locationMessage"].(map[string]interface{}); ok {
