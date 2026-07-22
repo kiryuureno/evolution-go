@@ -1260,6 +1260,27 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 			}
 		}
 
+		// Se o PushName do evento estiver vazio ou for apenas dígitos/LID, consultar a lista de contatos do WhatsMeow
+		isDigitOrEmptyName := evt.Info.PushName == "" || regexp.MustCompile(`^\+?[0-9]+$`).MatchString(strings.TrimSpace(evt.Info.PushName)) || strings.Contains(evt.Info.PushName, "@lid")
+		if isDigitOrEmptyName && mycli.WAClient != nil && mycli.WAClient.Store != nil && mycli.WAClient.Store.Contacts != nil {
+			targetJid := evt.Info.Sender
+			if targetJid.IsEmpty() {
+				targetJid = evt.Info.Chat
+			}
+			if !targetJid.IsEmpty() {
+				contact, err := mycli.WAClient.Store.Contacts.GetContact(targetJid)
+				if err == nil && contact.Found {
+					if contact.FullName != "" {
+						evt.Info.PushName = contact.FullName
+					} else if contact.BusinessName != "" {
+						evt.Info.PushName = contact.BusinessName
+					} else if contact.PushName != "" {
+						evt.Info.PushName = contact.PushName
+					}
+				}
+			}
+		}
+
 		// Auto-marca mensagens como lidas se configurado
 		if mycli.Instance.ReadMessages && !evt.Info.IsFromMe {
 			go func() {

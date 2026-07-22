@@ -416,7 +416,8 @@ func (s *chatwootService) updateContactDetails(instance *instance_model.Instance
 	}
 	url := fmt.Sprintf("%s/api/v1/accounts/%s/contacts/%d", instance.ChatwootUrl, instance.ChatwootAccountId, contactId)
 	bodyMap := make(map[string]string)
-	if name != "" && !strings.HasSuffix(name, "@lid") {
+	isDigitName := regexp.MustCompile(`^\+?[0-9]+$`).MatchString(strings.TrimSpace(name)) || strings.Contains(name, "@lid")
+	if name != "" && !strings.HasSuffix(name, "@lid") && !isDigitName {
 		bodyMap["name"] = name
 	}
 	cleanPhone := phoneNumber
@@ -509,7 +510,13 @@ func (s *chatwootService) findOrCreateContact(instance *instance_model.Instance,
 			var searchRes chatwoot_model.ChatwootSearchContactResp
 			if json.Unmarshal(bodyBytes, &searchRes) == nil && len(searchRes.Payload) > 0 {
 				cId := searchRes.Payload[0].ID
-				go s.updateContactDetails(instance, cId, name, phoneNumber, altLid)
+				existingName := searchRes.Payload[0].Name
+				finalName := name
+				isDigitName := regexp.MustCompile(`^\+?[0-9]+$`).MatchString(strings.TrimSpace(name)) || strings.Contains(name, "@lid")
+				if (finalName == "" || isDigitName) && existingName != "" && !regexp.MustCompile(`^\+?[0-9]+$`).MatchString(strings.TrimSpace(existingName)) {
+					finalName = existingName
+				}
+				go s.updateContactDetails(instance, cId, finalName, phoneNumber, altLid)
 				return cId, nil
 			}
 		}
