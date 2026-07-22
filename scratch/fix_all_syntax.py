@@ -1,10 +1,12 @@
 import subprocess
 
-# Restore original JS file from git
-subprocess.run(['git', 'checkout', 'manager/dist/assets/index-B7iM18f_.js'], check=True)
+# Restore clean JS file using git restore
+subprocess.run(['git', 'restore', 'manager/dist/assets/index-B7iM18f_.js'], check=True)
 
 with open('manager/dist/assets/index-B7iM18f_.js', 'r', encoding='utf-8', errors='ignore') as f:
     code = f.read()
+
+print('Original JS length:', len(code))
 
 header = 'm.jsxs("div",{className:"flex items-center justify-between p-5 border-b border-sidebar-border bg-sidebar/50",children:[m.jsxs("div",{className:"flex items-center gap-3",children:[m.jsx("div",{className:"p-2 rounded-lg bg-teal-500/10 text-teal-500",children:m.jsx(CwIcon,{className:"h-6 w-6"})}),m.jsxs("div",{children:[m.jsx("h2",{className:"text-lg font-bold text-foreground",children:"Configurações do Chatwoot"}),m.jsxs("p",{className:"text-xs text-muted-foreground",children:["Instância: ",m.jsx("span",{className:"font-semibold text-teal-400",children:r.instanceName})]})]})]}),m.jsxs("div",{className:"flex items-center gap-2",children:[m.jsxs(it,{type:"button",variant:"outline",size:"sm",onClick:()=>fetchConfig(!0),disabled:fetching||loading,className:"h-8 px-3 text-xs gap-1.5 text-teal-400 border-teal-500/30 hover:bg-teal-500/10",children:[m.jsx("svg",{className:`h-3.5 w-3.5 ${fetching?"animate-spin":""}`,fill:"none",viewBox:"0 0 24 24",stroke:"currentColor",strokeWidth:"2",children:m.jsx("path",{strokeLinecap:"round",strokeLinejoin:"round",d:"M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"})}),"Carregar Salvo"]}),m.jsx("button",{onClick:n,className:"rounded-lg p-1.5 text-muted-foreground hover:text-foreground hover:bg-sidebar-accent transition-colors",children:m.jsx(Es,{className:"h-5 w-5"})})]})]})'
 
@@ -35,19 +37,22 @@ target_btn = 'm.jsx(it,{variant:"ghost",className:"rounded-none h-12 px-4 text-g
 new_btn = 'cw&&m.jsxs(m.Fragment,{children:[m.jsx(it,{variant:"ghost",className:"rounded-none h-12 px-4 text-teal-500 hover:text-teal-400 hover:bg-teal-500/10",onClick:()=>cw(t),title:"Configurações do Chatwoot",children:m.jsx(CwIcon,{className:"h-4 w-4"})}),m.jsx("div",{className:"w-px bg-sidebar-border"})]}),' + target_btn
 code = code.replace(target_btn, new_btn, 1)
 
-# 3. Add state to uL()
-target_ul_state = 'const[A,D]=b.useState({isOpen:!1,instance:null}),[B,I]=b.useState({isOpen:!1,instance:null}),U=b.useRef(!1);'
-new_ul_state = 'const[A,D]=b.useState({isOpen:!1,instance:null}),[B,I]=b.useState({isOpen:!1,instance:null}),[CwM,setCwM]=b.useState({isOpen:!1,instance:null}),handleCwClose=()=>setCwM({isOpen:!1,instance:null}),handleCwOpen=b.useCallback(ce=>{setCwM({isOpen:!0,instance:ce})},[]),U=b.useRef(!1);'
+# 3. Add state and handlers to uL()
+target_ul_state = ',[B,I]=b.useState({isOpen:!1,instance:null}),U=b.useRef(!1);'
+new_ul_state = ',[B,I]=b.useState({isOpen:!1,instance:null}),[CwM,setCwM]=b.useState({isOpen:!1,instance:null}),handleCwClose=()=>setCwM({isOpen:!1,instance:null}),handleCwOpen=b.useCallback(ce=>{setCwM({isOpen:!0,instance:ce})},[]),U=b.useRef(!1);'
+print('Found target_ul_state?', target_ul_state in code)
 code = code.replace(target_ul_state, new_ul_state, 1)
 
 # 4. Update Fz call in uL()
 target_ul_map = '$.map(ce=>m.jsx(Fz,{instance:ce,isDeleting:C,onSettings:pe,onDelete:ye,onConnect:re,onDisconnect:ue,onSendMessage:te,onTestMessage:ne},ce.instanceName))'
 new_ul_map = '$.map(ce=>m.jsx(Fz,{instance:ce,isDeleting:C,onSettings:pe,onDelete:ye,onConnect:re,onDisconnect:ue,onSendMessage:te,onTestMessage:ne,onChatwoot:handleCwOpen},ce.instanceName))'
+print('Found target_ul_map?', target_ul_map in code)
 code = code.replace(target_ul_map, new_ul_map, 1)
 
 # 5. Render cwL modal in uL()
 target_ul_modals = 'm.jsx(lL,{instance:A.instance,open:A.isOpen,onClose:T})'
 new_ul_modals = target_ul_modals + ',m.jsx(cwL,{instance:CwM.instance,open:CwM.isOpen,onClose:handleCwClose})'
+print('Found target_ul_modals?', target_ul_modals in code)
 code = code.replace(target_ul_modals, new_ul_modals, 1)
 
 with open('manager/dist/assets/index-B7iM18f_.js', 'w', encoding='utf-8') as f:
