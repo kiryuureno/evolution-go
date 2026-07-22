@@ -2,6 +2,7 @@ package chatwoot_service
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -15,6 +16,8 @@ import (
 	"time"
 
 	"github.com/patrickmn/go-cache"
+	"go.mau.fi/whatsmeow"
+	"go.mau.fi/whatsmeow/types"
 
 	chatwoot_model "github.com/evolution-foundation/evolution-go/pkg/chatwoot/model"
 	instance_model "github.com/evolution-foundation/evolution-go/pkg/instance/model"
@@ -417,6 +420,49 @@ func (s *chatwootService) ProcessWhatsAppEvent(instance *instance_model.Instance
 	return s.postMessageToChatwoot(instance, conversationId, content, msgType, msgId, quotedStanzaId)
 }
 
+func (s *chatwootService) fetchWhatsAppProfileInfo(instanceId, targetJid string) (string, string) {
+	if s == nil || s.sendService == nil || targetJid == "" {
+		return "", ""
+	}
+	cli := s.sendService.GetClient(instanceId)
+	if cli == nil {
+		return "", ""
+	}
+
+	cleanJidStr := targetJid
+	if !strings.Contains(cleanJidStr, "@") {
+		cleanJidStr = cleanJidStr + "@s.whatsapp.net"
+	}
+	parsedJid, err := types.ParseJID(cleanJidStr)
+	if err != nil {
+		return "", ""
+	}
+
+	avatarUrl := ""
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	picInfo, pErr := cli.GetProfilePictureInfo(ctx, parsedJid, &whatsmeow.GetProfilePictureParams{})
+	cancel()
+	if pErr == nil && picInfo != nil && picInfo.URL != "" {
+		avatarUrl = picInfo.URL
+	}
+
+	resolvedName := ""
+	if cli.Store != nil && cli.Store.Contacts != nil {
+		cData, cErr := cli.Store.Contacts.GetContact(context.Background(), parsedJid)
+		if cErr == nil && cData.Found {
+			if cData.FullName != "" {
+				resolvedName = cData.FullName
+			} else if cData.BusinessName != "" {
+				resolvedName = cData.BusinessName
+			} else if cData.PushName != "" {
+				resolvedName = cData.PushName
+			}
+		}
+	}
+
+	return avatarUrl, resolvedName
+}
+
 func (s *chatwootService) updateContactDetails(instance *instance_model.Instance, contactId int, name, phoneNumber, identifier string) {
 	if contactId <= 0 {
 		return
@@ -424,6 +470,16 @@ func (s *chatwootService) updateContactDetails(instance *instance_model.Instance
 	url := fmt.Sprintf("%s/api/v1/accounts/%s/contacts/%d", instance.ChatwootUrl, instance.ChatwootAccountId, contactId)
 	bodyMap := make(map[string]string)
 	isDigitName := regexp.MustCompile(`^\+?[0-9]+$`).MatchString(strings.TrimSpace(name)) || strings.Contains(name, "@lid")
+
+	avatarUrl, resolvedName := s.fetchWhatsAppProfileInfo(instance.Id, identifier)
+	if avatarUrl == "" && phoneNumber != "" {
+		avatarUrl, _ = s.fetchWhatsAppProfileInfo(instance.Id, phoneNumber)
+	}
+	if resolvedName != "" && (name == "" || isDigitName) {
+		name = resolvedName
+		isDigitName = false
+	}
+
 	if name != "" && !strings.HasSuffix(name, "@lid") && !isDigitName {
 		bodyMap["name"] = name
 	}
@@ -436,6 +492,9 @@ func (s *chatwootService) updateContactDetails(instance *instance_model.Instance
 	}
 	if identifier != "" {
 		bodyMap["identifier"] = identifier
+	}
+	if avatarUrl != "" {
+		bodyMap["avatar_url"] = avatarUrl
 	}
 	if len(bodyMap) > 0 {
 		bodyBytes, _ := json.Marshal(bodyMap)
@@ -535,12 +594,22 @@ func (s *chatwootService) findOrCreateContact(instance *instance_model.Instance,
 		reqPhone = ""
 	}
 
+	avatarUrl, resolvedName := s.fetchWhatsAppProfileInfo(instance.Id, identifier)
+	if avatarUrl == "" && phoneNumber != "" {
+		avatarUrl, _ = s.fetchWhatsAppProfileInfo(instance.Id, phoneNumber)
+	}
+	isDigitName := regexp.MustCompile(`^\+?[0-9]+$`).MatchString(strings.TrimSpace(name)) || strings.Contains(name, "@lid")
+	if resolvedName != "" && (name == "" || isDigitName) {
+		name = resolvedName
+	}
+
 	createUrl := fmt.Sprintf("%s/api/v1/accounts/%s/contacts", instance.ChatwootUrl, instance.ChatwootAccountId)
 	contactReq := chatwoot_model.ChatwootContactReq{
 		InboxId:     instance.ChatwootInboxId,
 		Name:        name,
 		PhoneNumber: reqPhone,
 		Identifier:  identifier,
+		AvatarUrl:   avatarUrl,
 	}
 
 	bodyBytes, _ := json.Marshal(contactReq)

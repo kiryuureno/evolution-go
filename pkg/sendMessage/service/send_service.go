@@ -50,6 +50,7 @@ type SendService interface {
 	SendStatusText(data *StatusTextStruct, instance *instance_model.Instance) (*MessageSendStruct, error)
 	SendStatusMediaUrl(data *StatusMediaStruct, instance *instance_model.Instance) (*MessageSendStruct, error)
 	SendStatusMediaFile(data *StatusMediaStruct, fileData []byte, instance *instance_model.Instance) (*MessageSendStruct, error)
+	GetClient(instanceId string) *whatsmeow.Client
 }
 
 type sendService struct {
@@ -57,6 +58,13 @@ type sendService struct {
 	whatsmeowService whatsmeow_service.WhatsmeowService
 	config           *config.Config
 	loggerWrapper    *logger_wrapper.LoggerManager
+}
+
+func (s *sendService) GetClient(instanceId string) *whatsmeow.Client {
+	if s == nil || s.clientPointer == nil {
+		return nil
+	}
+	return s.clientPointer[instanceId]
 }
 
 type SendDataStruct struct {

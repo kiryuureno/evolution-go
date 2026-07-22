@@ -40,6 +40,7 @@ type ChatwootContactReq struct {
 	Email       string `json:"email,omitempty"`
 	PhoneNumber string `json:"phone_number,omitempty"`
 	Identifier  string `json:"identifier,omitempty"`
+	AvatarUrl   string `json:"avatar_url,omitempty"`
 }
 
 type ChatwootContact struct {
@@ -48,6 +49,7 @@ type ChatwootContact struct {
 	PhoneNumber string `json:"phone_number"`
 	Identifier  string `json:"identifier"`
 	Email       string `json:"email"`
+	AvatarUrl   string `json:"avatar_url"`
 }
 
 type ChatwootContactResp struct {
