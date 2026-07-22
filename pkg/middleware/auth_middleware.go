@@ -25,6 +25,11 @@ func (m middleware) Auth(ctx *gin.Context) {
 		return
 	}
 
+	if token == m.config.GlobalApiKey {
+		ctx.Next()
+		return
+	}
+
 	instance, err := m.instanceService.GetInstanceByToken(token)
 	if err != nil {
 		ctx.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "not authorized"})
