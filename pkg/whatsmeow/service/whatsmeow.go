@@ -1191,7 +1191,7 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 		if (mycli.config.EventIgnoreStatus || mycli.Instance.IgnoreStatus) && (strings.Contains(evt.Info.Chat.String(), "@broadcast") || strings.Contains(evt.Info.ID, "@broadcast")) {
 			return
 		}
-
+		// marcação para checkpoint
 		// Trata a troca de LID por WhatsApp JID real (@s.whatsapp.net) para mensagens recebidas e enviadas
 		senderStr := evt.Info.Sender.String()
 		senderAltStr := evt.Info.SenderAlt.String()
