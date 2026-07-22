@@ -364,14 +364,9 @@ func (s *chatwootService) ProcessWhatsAppEvent(instance *instance_model.Instance
 		content = "[Mídia / Mensagem não suportada]"
 	}
 
-	// Se for grupo e mensagem recebida de outro participante, prefixar o nome do remetente
+	// Se for grupo e mensagem recebida de outro participante, prefixar o nome real do remetente
 	if isGroup && !fromMe {
-		senderName := "Participante"
-		if pn, ok := data["pushName"].(string); ok && pn != "" {
-			senderName = pn
-		} else if pn, ok := data["PushName"].(string); ok && pn != "" {
-			senderName = pn
-		}
+		senderName := s.resolveParticipantName(instance, data, key)
 		content = fmt.Sprintf("*%s*: %s", senderName, content)
 	}
 
@@ -461,6 +456,82 @@ func (s *chatwootService) fetchWhatsAppProfileInfo(instanceId, targetJid string)
 	}
 
 	return avatarUrl, resolvedName
+}
+
+func (s *chatwootService) resolveParticipantName(instance *instance_model.Instance, data map[string]interface{}, key map[string]interface{}) string {
+	senderJid := ""
+	if sStr, ok := data["Sender"].(string); ok && sStr != "" {
+		senderJid = sStr
+	} else if sStr, ok := data["sender"].(string); ok && sStr != "" {
+		senderJid = sStr
+	} else if part, ok := key["participant"].(string); ok && part != "" {
+		senderJid = part
+	} else if sAlt, ok := data["SenderAlt"].(string); ok && sAlt != "" {
+		senderJid = sAlt
+	}
+
+	payloadPushName := ""
+	if pn, ok := data["pushName"].(string); ok && pn != "" {
+		payloadPushName = pn
+	} else if pn, ok := data["PushName"].(string); ok && pn != "" {
+		payloadPushName = pn
+	} else if pn, ok := data["participantPushName"].(string); ok && pn != "" {
+		payloadPushName = pn
+	}
+
+	isDigitOnly := regexp.MustCompile(`^\+?[0-9]+$`).MatchString(strings.TrimSpace(payloadPushName))
+	if payloadPushName != "" && !isDigitOnly {
+		return payloadPushName
+	}
+
+	if senderJid != "" {
+		cleanJid := strings.Split(senderJid, ":")[0]
+		phone := strings.Split(cleanJid, "@")[0]
+		phoneWithPlus := "+" + phone
+
+		// 1. Tentar buscar nome gravado nos contatos do WhatsApp (whatsmeow store)
+		_, resolvedName := s.fetchWhatsAppProfileInfo(instance.Id, cleanJid)
+		if resolvedName != "" && !regexp.MustCompile(`^\+?[0-9]+$`).MatchString(strings.TrimSpace(resolvedName)) {
+			return resolvedName
+		}
+
+		// 2. Tentar buscar se o contato já existe no Chatwoot com um nome cadastrado
+		if instance != nil && instance.ChatwootUrl != "" && instance.ChatwootAccountId != "" && instance.ChatwootToken != "" {
+			searchQueries := []string{cleanJid, phoneWithPlus}
+			for _, query := range searchQueries {
+				searchUrl := fmt.Sprintf("%s/api/v1/accounts/%s/contacts/search?q=%s", instance.ChatwootUrl, instance.ChatwootAccountId, query)
+				req, err := http.NewRequest("GET", searchUrl, nil)
+				if err == nil {
+					req.Header.Set("api_access_token", instance.ChatwootToken)
+					client := &http.Client{Timeout: 3 * time.Second}
+					resp, err := client.Do(req)
+					if err == nil && resp.StatusCode == 200 {
+						bodyBytes, _ := io.ReadAll(resp.Body)
+						resp.Body.Close()
+						var searchRes chatwoot_model.ChatwootSearchContactResp
+						if json.Unmarshal(bodyBytes, &searchRes) == nil && len(searchRes.Payload) > 0 {
+							existingName := searchRes.Payload[0].Name
+							if existingName != "" && !regexp.MustCompile(`^\+?[0-9]+$`).MatchString(strings.TrimSpace(existingName)) {
+								return existingName
+							}
+						}
+					}
+				}
+			}
+		}
+
+		// 3. Fallback: se houver pushName (mesmo numérico), usar
+		if payloadPushName != "" {
+			return payloadPushName
+		}
+
+		// 4. Fallback: telefone formatado
+		if phone != "" {
+			return phoneWithPlus
+		}
+	}
+
+	return "Participante"
 }
 
 func (s *chatwootService) updateContactDetails(instance *instance_model.Instance, contactId int, name, phoneNumber, identifier string) {
