@@ -1268,7 +1268,7 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 				targetJid = evt.Info.Chat
 			}
 			if !targetJid.IsEmpty() {
-				contact, err := mycli.WAClient.Store.Contacts.GetContact(targetJid)
+				contact, err := mycli.WAClient.Store.Contacts.GetContact(context.Background(), targetJid)
 				if err == nil && contact.Found {
 					if contact.FullName != "" {
 						evt.Info.PushName = contact.FullName

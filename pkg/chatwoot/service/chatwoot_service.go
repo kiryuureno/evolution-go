@@ -233,7 +233,7 @@ func (s *chatwootService) ProcessWhatsAppEvent(instance *instance_model.Instance
 	fromMe, _ := key["fromMe"].(bool)
 	keyJid, _ := key["remoteJid"].(string)
 
-	// Resolver JID real de telefone do contato (ignorando LIDs e número próprio da instância)
+	// Resolver JID real de telefone do contato
 	targetJid := ""
 	myNumber := strings.Split(instance.Jid, "@")[0]
 
@@ -262,18 +262,14 @@ func (s *chatwootService) ProcessWhatsAppEvent(instance *instance_model.Instance
 		candidates = append(candidates, keyJid)
 	}
 
-	for _, c := range candidates {
-		cClean := strings.Split(c, ":")[0]
-		userNum := strings.Split(cClean, "@")[0]
-		if myNumber != "" && (userNum == myNumber || strings.TrimPrefix(userNum, "55") == strings.TrimPrefix(myNumber, "55")) {
-			continue
-		}
-		if !strings.HasSuffix(cClean, "@lid") && !strings.HasSuffix(cClean, "@broadcast") {
-			targetJid = cClean
-			break
-		}
+	// 1. Se o chat for um Grupo (@g.us), priorizar o JID do Grupo
+	if chat, ok := data["Chat"].(string); ok && strings.HasSuffix(strings.Split(chat, ":")[0], "@g.us") {
+		targetJid = strings.Split(chat, ":")[0]
+	} else if keyJid != "" && strings.HasSuffix(strings.Split(keyJid, ":")[0], "@g.us") {
+		targetJid = strings.Split(keyJid, ":")[0]
 	}
 
+	// 2. Se não for grupo, procurar contato de terceiro (não meu número)
 	if targetJid == "" {
 		for _, c := range candidates {
 			cClean := strings.Split(c, ":")[0]
@@ -281,19 +277,23 @@ func (s *chatwootService) ProcessWhatsAppEvent(instance *instance_model.Instance
 			if myNumber != "" && (userNum == myNumber || strings.TrimPrefix(userNum, "55") == strings.TrimPrefix(myNumber, "55")) {
 				continue
 			}
-			if !strings.HasSuffix(cClean, "@broadcast") {
+			if !strings.HasSuffix(cClean, "@lid") && !strings.HasSuffix(cClean, "@broadcast") {
 				targetJid = cClean
 				break
 			}
 		}
 	}
 
-	if targetJid == "" || strings.HasSuffix(targetJid, "@broadcast") {
-		return nil
+	// 3. Se ainda assim targetJid for vazio (auto-mensagem / "Conversar com você mesmo"), usar o meu próprio número para chat direto "Você"
+	if targetJid == "" {
+		if chat, ok := data["Chat"].(string); ok && strings.HasSuffix(chat, "@s.whatsapp.net") {
+			targetJid = strings.Split(chat, ":")[0]
+		} else if keyJid != "" && strings.HasSuffix(keyJid, "@s.whatsapp.net") {
+			targetJid = strings.Split(keyJid, ":")[0]
+		}
 	}
 
-	targetNum := strings.Split(targetJid, "@")[0]
-	if myNumber != "" && (targetNum == myNumber || strings.TrimPrefix(targetNum, "55") == strings.TrimPrefix(myNumber, "55")) {
+	if targetJid == "" || strings.HasSuffix(targetJid, "@broadcast") {
 		return nil
 	}
 
@@ -305,9 +305,16 @@ func (s *chatwootService) ProcessWhatsAppEvent(instance *instance_model.Instance
 	if pushName == "" {
 		if pn, ok := data["PushName"].(string); ok && pn != "" {
 			pushName = pn
-		} else {
-			pushName = strings.Split(targetJid, "@")[0]
 		}
+	}
+
+	targetNum := strings.Split(targetJid, "@")[0]
+	if myNumber != "" && (targetNum == myNumber || strings.TrimPrefix(targetNum, "55") == strings.TrimPrefix(myNumber, "55")) && !strings.HasSuffix(targetJid, "@g.us") {
+		if pushName == "" || regexp.MustCompile(`^\+?[0-9]+$`).MatchString(strings.TrimSpace(pushName)) {
+			pushName = "Você (Meu Número)"
+		}
+	} else if pushName == "" {
+		pushName = targetNum
 	}
 
 	isGroup := strings.HasSuffix(targetJid, "@g.us")
