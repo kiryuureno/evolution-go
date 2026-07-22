@@ -1,0 +1,9 @@
+import subprocess
+
+item4 = 'm.jsxs("div",{className:"space-y-3 border-t border-sidebar-border pt-4",children:[m.jsxs("div",{className:"flex items-center justify-between gap-4",children:[m.jsxs("div",{className:"space-y-0.5",children:[m.jsx("label",{className:"text-xs font-semibold text-foreground/80",children:"Limite de Dias para Importar Mensagens"}),m.jsx("p",{className:"text-[10px] text-muted-foreground",children:"0 para importar todo o histórico disponível."})]}),m.jsx("input",{type:"number",min:"0",value:formData.daysLimitImportMessages,onChange:e=>handleChange("daysLimitImportMessages",e.target.value),className:"w-28 rounded-lg border border-sidebar-border bg-background px-3 py-1.5 text-sm text-foreground text-center focus:outline-none focus:ring-2 focus:ring-teal-500"})]}),formData.enabled&&m.jsxs("div",{className:"flex flex-wrap gap-2 pt-2",children:[m.jsxs(it,{type:"button",variant:"outline",size:"sm",onClick:handleSyncContacts,disabled:syncingContacts||loading,className:"text-xs gap-1.5 border-teal-500/30 text-teal-400 hover:bg-teal-500/10",children:[syncingContacts?"Sincronizando Contatos...":"Sincronizar Contatos Agora"]}),m.jsxs(it,{type:"button",variant:"outline",size:"sm",onClick:handleSyncMessages,disabled:syncingMessages||loading,className:"text-xs gap-1.5 border-teal-500/30 text-teal-400 hover:bg-teal-500/10",children:[syncingMessages?"Sincronizando Mensagens...":"Sincronizar Mensagens Agora"]})]})]})'
+
+with open('scratch/item4_test.js', 'w', encoding='utf-8') as f:
+    f.write('var m, it, formData, handleChange, handleSyncContacts, handleSyncMessages, syncingContacts, syncingMessages, loading;\nvar item4 = ' + item4 + ';\n')
+
+r = subprocess.run(['node', '-c', 'scratch/item4_test.js'], capture_output=True, text=True)
+print('item4 test:', r.stderr.strip() or 'SUCCESS!')
